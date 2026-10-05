@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.13.2
+// @version      1.13.3
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -278,7 +278,7 @@
   const rateField = field('', rateInput), engineField = field('読み上げエンジン', engineSel);
   const voiceField = field('声', voiceSel);
   const panel = mk('div', 'pbv-panel');
-  panel.append(row(speak), row(toggle, back, list), rateField, row(engineField, voiceField));
+  panel.append(row(list, toggle, back), row(speak), rateField, row(engineField, voiceField));
   imageTools.append(status, menu, panel);
   const displayBtn = mk('button', 'pbv-display', 'Aa');
   displayBtn.setAttribute('aria-label', '表示オプション');
