@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.14.1
+// @version      1.14.2
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -181,6 +181,9 @@
     #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal :not(img):not(svg):not(svg *) {
       color:var(--pbv-fg,inherit)!important;-webkit-text-fill-color:var(--pbv-fg,currentcolor)!important;
       background:none!important;text-shadow:none!important;filter:none!important;mix-blend-mode:normal!important; }
+    /* ダークモードのリーダーは、ページ全体を色反転して暗くし、画像だけ再度反転して元の色に戻している。
+       複製側ではページの反転を外すので、画像側の反転も外す（残すと画像だけ色が反転する）。 */
+    #pbv-pages .pbv-horizontal img, #pbv-pages .pbv-horizontal svg, #pbv-pages .pbv-horizontal svg * { filter:none!important; }
     #pbv-pages .pbv-horizontal .gb-segment { font-size:var(--pbv-size,18px)!important; }
     #pbv-pages .pbv-horizontal [style*="display:none"],
     #pbv-pages .pbv-horizontal [style*="display: none"] { display:none!important; }
