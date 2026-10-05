@@ -3,6 +3,7 @@ package app.playbook;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
@@ -41,6 +42,8 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("playbook", MODE_PRIVATE);
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         initTts(prefs.getString("engine", DEFAULT_ENGINE));
+        // デバッグ版のときだけ、PC の Chrome（chrome://inspect）から画面構造を調べられるようにする。
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) WebView.setWebContentsDebuggingEnabled(true);
         web = new WebView(this);
         setContentView(web);
         WebSettings s = web.getSettings();

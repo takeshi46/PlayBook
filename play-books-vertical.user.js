@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.11.2
+// @version      1.12.0
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -218,6 +218,9 @@
     #pbv-panel #pbv-speak.on { background:#d93025;border-color:#d93025; }
     #pbv-panel button[aria-pressed="true"], #pbv-panel button[aria-expanded="true"] {
       background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
+    reader-account-indicator { display:none!important; }
+    #pbv-menu.pbv-bar { position:static;flex:none;width:40px;height:40px;margin:0;border:0;border-radius:50%;
+      background:transparent;box-shadow:none;opacity:1;font-size:22px; }
     .gb-segment p.pbv-tts { background:rgba(26,115,232,.22)!important; }
     #pbv-gallery { position:fixed;left:8px;top:64px;max-height:calc(100% - 72px - var(--pbv-sheet,0px));z-index:2147483647;
       width:min(420px,calc(100% - 16px));box-sizing:border-box;overflow:auto;padding:8px;
@@ -772,6 +775,20 @@
   }
   window.addEventListener('resize', resize);
   // ponytail: 配色変更はページ更新を伴わないことがあるため、1秒ごとに設定を読み直す。
-  setInterval(syncTheme, 1000);
+  // 右上のアカウントアイコン（CSSで非表示）の位置にメニューボタンを置く。
+  // バーが無いとき（全画面表示など）は、右下に浮かせる。
+  function placeMenu() {
+    const slot = document.querySelector('reader-app-bar .nav-group.end');
+    if (slot) {
+      if (menu.parentElement !== slot) { slot.append(menu); menu.classList.add('pbv-bar'); }
+      const ref = slot.querySelector('button:not(#pbv-menu)');
+      if (ref) menu.style.color = getComputedStyle(ref).color;
+    } else if (menu.parentElement !== imageTools) {
+      menu.classList.remove('pbv-bar'); menu.style.color = '';
+      imageTools.insertBefore(menu, panel);
+    }
+  }
+  placeMenu();
+  setInterval(() => { syncTheme(); placeMenu(); }, 1000);
   }
 })();
