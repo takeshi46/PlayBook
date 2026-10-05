@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.14.0
+// @version      1.14.1
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -169,6 +169,8 @@
       columns:auto!important;float:none!important;clip:auto!important;clip-path:none!important;
       text-align:start!important;white-space:normal!important;line-height:var(--pbv-lh,1.9)!important; }
     #pbv-pages .pbv-horizontal div { margin:0!important;padding:0!important; }
+    /* リーダー側の本文ページには左右24pxの余白が付いている。余白はスライダーだけで決める。 */
+    #pbv-pages .pbv-horizontal reader-rendered-page { padding-left:0!important;padding-right:0!important; }
     #pbv-pages .pbv-horizontal p { margin:0 0 0.7em!important;padding:0!important;
       text-indent:0!important;overflow-wrap:anywhere; }
     #pbv-pages .pbv-horizontal p:has(>br:only-child) { display:none!important; }
@@ -714,15 +716,16 @@
   fillSelects();
   uiLabels();
   // 縦表示の左右の余白（px）。既定はスマホ幅で狭く、広い画面で広く。
-  const savedPad = store('pbv-pad');
-  let pad = savedPad === null || savedPad === '' ? (innerWidth <= 600 ? 3 : 28) : Number(savedPad);
+  // ponytail: 保存キーを pbv-pad2 にしたのは、旧版（ページ側の24pxを含む値）と意味が違うため。
+  const savedPad = store('pbv-pad2');
+  let pad = savedPad === null || savedPad === '' ? (innerWidth <= 600 ? 27 : 52) : Number(savedPad);
   const applyPad = () => {
     document.documentElement.style.setProperty('--pbv-pad', `${pad}px`);
     padField.label.textContent = `縦表示の左右の余白 ${pad}px`;
     padInput.value = pad;
     resize();
   };
-  padInput.addEventListener('input', () => { pad = Number(padInput.value); store('pbv-pad', pad); applyPad(); });
+  padInput.addEventListener('input', () => { pad = Number(padInput.value); store('pbv-pad2', pad); applyPad(); });
   applyPad();
   toggle.addEventListener('click', () => {
     if (speaking) stopSpeech();   // 表示モードが変わるので読み上げを止める
