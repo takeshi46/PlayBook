@@ -1,0 +1,594 @@
+// ==UserScript==
+// @name         Google Play Books 上下スクロール
+// @namespace    local.playbooks.vertical
+// @homepageURL  https://github.com/takeshi46/Userscripts
+// @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
+// @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
+// @version      1.8.8
+// @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
+// @match        https://books.googleusercontent.com/books/reader/frame*
+// @match        https://play.google.com/books/reader*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(() => {
+  'use strict';
+  // 親ページだけが読書URLを操作する。iframeから渡されたURLは使用しない。
+  if (location.hostname === 'play.google.com') {
+    window.addEventListener('message', event => {
+      const frame = document.querySelector('iframe.-gb-display');
+      if (event.origin !== 'https://books.googleusercontent.com' || event.source !== frame?.contentWindow) return;
+      const url = new URL(location.href), id = url.searchParams.get('id');
+      if (!id) return;
+      const key = `pbv-return:${id}`, modeKey = `pbv-mode:${id}`, targetKey = `pbv-target:${id}`;
+      let bookmark, mode, savedIndex, landing;
+      try { bookmark = JSON.parse(sessionStorage.getItem(key) || 'null'); mode = sessionStorage.getItem(modeKey) === 'true'; } catch {}
+      try { landing = sessionStorage.getItem(targetKey); } catch {}
+      try { savedIndex = JSON.parse(localStorage.getItem(`pbv-index:${id}`) || 'null'); } catch {}
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'pbv-context') {
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing }, event.origin);
+      } else if (data.type === 'pbv-landed') {
+        try { sessionStorage.removeItem(targetKey); } catch {}
+      } else if (data.type === 'pbv-index') {
+        const merged = { images: [], ranges: [] };
+        mergeIndex(merged, data.index); mergeIndex(merged, savedIndex);
+        try { localStorage.setItem(`pbv-index:${id}`, JSON.stringify(merged)); } catch {}
+      } else if (data.type === 'pbv-mark') {
+        try { sessionStorage.setItem(key, JSON.stringify({ pg: url.searchParams.get('pg'), mode: data.mode === true })); } catch {}
+        event.source.postMessage({ type: 'pbv-marked', pg: url.searchParams.get('pg') }, event.origin);
+      } else if (data.type === 'pbv-goto' || data.type === 'pbv-return') {
+        const pg = data.type === 'pbv-return' ? bookmark?.pg : data.pg;
+        if (typeof pg !== 'string' || !/^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(pg)) return;
+        try {
+          if (data.type === 'pbv-goto') sessionStorage.setItem(targetKey, pg);
+          else sessionStorage.removeItem(targetKey);
+        } catch {}
+        try { sessionStorage.setItem(modeKey, String(data.type === 'pbv-return' ? bookmark.mode : data.mode === true)); } catch {}
+        url.searchParams.set('pg', pg);
+        location.assign(url.href);
+      }
+    });
+    return;
+  }
+  const streamed = { images: [], ranges: [] };
+  let manifest, refresh = () => {};
+  // 通常のリーダーが受信した章HTMLだけを読む。通信内容やアプリのコールバックは変更しない。
+  const observed = new WeakSet(), add = MessagePort.prototype.addEventListener;
+  function receive(event) {
+    const data = event.data;
+    const info = data?.manifest || data;
+    if (info?.metadata?.volume_id && Array.isArray(info.segment)) manifest = info;
+    if (typeof data?.content !== 'string' || data.content.length > 2000000
+      || !manifest?.segment.some(s => s.label === data.current_position)) return;
+    try {
+      mergeIndex(streamed, contentIndex(data.content));
+      refresh();
+    } catch {}
+  }
+  function observe(port) {
+    if (!observed.has(port)) {
+      observed.add(port);
+      add.call(port, 'message', receive);
+    }
+  }
+  MessagePort.prototype.addEventListener = function(type, ...args) {
+    if (type === 'message') observe(this);
+    return add.call(this, type, ...args);
+  };
+  const onmessage = Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+  Object.defineProperty(MessagePort.prototype, 'onmessage', {
+    ...onmessage,
+    set(value) { if (value) observe(this); return onmessage.set.call(this, value); },
+  });
+  window.addEventListener('message', event => {
+    if (event.origin === 'https://play.google.com' && event.source === window.parent) event.ports?.forEach(observe);
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true });
+  else initialize();
+
+  function contentIndex(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const anchors = [...doc.querySelectorAll('[id]')].filter(a => order(a.id) !== null);
+    const result = { images: [], ranges: [] };
+    for (const image of doc.querySelectorAll('img, svg image')) {
+      // ponytail: 元画像の縦横200px以上を対象にする。挿絵と広告画像の区別はしない。
+      if (!(Number(image.getAttribute('width')) >= 200 && Number(image.getAttribute('height')) >= 200)) continue;
+      const before = anchors.filter(a => a.compareDocumentPosition(image) & 4).at(-1);
+      if (!before) continue;
+      // Googleの文字オフセットはDOMの文字数と一致しないため、挿絵直前の正式アンカーを使う。
+      const src = thumbSrc(image.getAttribute('src') || image.getAttribute('href') || image.getAttribute('xlink:href'));
+      result.images.push({ pg: before.id, order: order(before.id), src });
+    }
+    if (anchors.length) result.ranges.push([order(anchors[0].id), order(anchors.at(-1).id)]);
+    return result;
+  }
+  function order(pg) {
+    const match = /^GBS\.PT(\d+)(?:[._]|$)/.exec(pg || '');
+    const value = match ? Number(match[1]) : /^GBS\.PP1(?:[._]|$)/.test(pg || '') ? 0 : null;
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  // サムネ用の画像URL。Google Booksのhttpsのみ許可し、保存値も同じ検証を通す。
+  function thumbSrc(value) {
+    if (typeof value !== 'string' || !value) return undefined;
+    try {
+      const url = new URL(value, 'https://play.google.com/books/');
+      return url.protocol === 'https:' && /^(play|books)\.google\.com$/.test(url.hostname) && url.href.length <= 1000
+        ? url.href : undefined;
+    } catch { return undefined; }
+  }
+  function mergeIndex(index, saved) {
+    if (!saved) return;
+    for (const item of Array.isArray(saved.images) ? saved.images : []) {
+      const pg = typeof item?.pg === 'string' ? item.pg.replace(/_\d+$/, '') : null;
+      if (typeof item?.pg === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(item.pg)
+        && Number.isSafeInteger(item.order) && item.order >= 0 && order(item.pg) === item.order) {
+        // 先に統合した（新しい）URLを優先し、無い場合だけ補う。
+        const src = thumbSrc(item.src), have = index.images.find(i => i.pg.replace(/_\d+$/, '') === pg);
+        if (have) have.src ||= src;
+        else index.images.push({ pg, order: item.order, src });
+      }
+    }
+    for (const r of Array.isArray(saved.ranges) ? saved.ranges : []) {
+      if (Array.isArray(r) && r.length === 2 && r.every(n => Number.isSafeInteger(n) && n >= 0)
+        && r[0] <= r[1] && !index.ranges.some(i => i[0] === r[0] && i[1] === r[1])) index.ranges.push(r);
+    }
+    index.images.sort((a, b) => a.order - b.order);
+    index.ranges.sort((a, b) => a[0] - b[0]);
+    index.ranges = index.ranges.reduce((merged, r) => {
+      const last = merged.at(-1);
+      if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+      else merged.push([...r]);
+      return merged;
+    }, []);
+  }
+  function initialize() {
+  if (document.getElementById('pbv-toggle')) return;
+  const style = document.createElement('style');
+  style.textContent = `
+    #pbv-view { position:fixed;inset:56px 0 0;z-index:2147483646;
+      overflow:auto;background:var(--pbv-bg,#fff);overscroll-behavior:contain;overflow-anchor:none; }
+    #pbv-view[hidden] { display:none!important; }
+    #pbv-view.pbv-padded { inset:92px 0 0; }
+    #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
+      display:flex;flex-direction:column;align-items:center;gap:0; }
+    @media (max-width:600px) { #pbv-pages { padding:0 3px; } }
+    #pbv-pages > .pbv-sheet { flex:none;position:relative;display:block;
+      overflow:hidden;background:transparent; }
+    #pbv-pages > .pbv-horizontal { width:min(900px,100%)!important;height:auto!important;
+      box-sizing:border-box;padding:0;direction:ltr!important; }
+    #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal * {
+      writing-mode:horizontal-tb!important;-webkit-writing-mode:horizontal-tb!important;
+      text-orientation:mixed!important; }
+    #pbv-pages .pbv-horizontal reader-rendered-page,
+    #pbv-pages .pbv-horizontal div, #pbv-pages .pbv-horizontal p {
+      display:block!important;position:static!important;transform:none!important;
+      width:auto!important;height:auto!important;min-width:0!important;min-height:0!important;
+      max-width:none!important;max-height:none!important;overflow:visible!important;
+      columns:auto!important;float:none!important;clip:auto!important;clip-path:none!important;
+      text-align:start!important;white-space:normal!important;line-height:1.9!important; }
+    #pbv-pages .pbv-horizontal div { margin:0!important;padding:0!important; }
+    #pbv-pages .pbv-horizontal p { margin:0 0 0.7em!important;padding:0!important;
+      text-indent:0!important;overflow-wrap:anywhere; }
+    #pbv-pages .pbv-horizontal p:has(>br:only-child) { display:none!important; }
+    /* 文字色・書体・サイズ・背景はリーダーの設定を読み取って反映する（syncTheme） */
+    #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal .gb-segment {
+      color:var(--pbv-fg,inherit)!important;font-family:var(--pbv-font,inherit)!important; }
+    /* ダークモード等でリーダー側が個別に付けた文字色・背景・フィルターは、複製側では使わず統一する */
+    #pbv-pages .pbv-horizontal, #pbv-pages .pbv-horizontal :not(img):not(svg):not(svg *) {
+      color:var(--pbv-fg,inherit)!important;-webkit-text-fill-color:var(--pbv-fg,currentcolor)!important;
+      background:none!important;text-shadow:none!important;filter:none!important;mix-blend-mode:normal!important; }
+    #pbv-pages .pbv-horizontal .gb-segment { font-size:var(--pbv-size,18px)!important; }
+    #pbv-pages .pbv-horizontal [style*="display:none"],
+    #pbv-pages .pbv-horizontal [style*="display: none"] { display:none!important; }
+    #pbv-pages .pbv-horizontal img { max-width:100%;height:auto; }
+    /* 操作ボタンはリーダーのヘッダー直下の1行にまとめ、本文に重ねない（スマホ対応） */
+    #pbv-images { position:fixed;left:0;right:0;top:56px;height:36px;z-index:2147483647;box-sizing:border-box;
+      display:flex;align-items:center;gap:6px;padding:0 8px;pointer-events:none; }
+    #pbv-images > * { pointer-events:auto; }
+    #pbv-images button { flex:none;min-height:30px;padding:0 10px;border:1px solid #8886;border-radius:8px;
+      background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);cursor:pointer;font:13px sans-serif;white-space:nowrap; }
+    #pbv-images button:disabled { opacity:0.5;cursor:default; }
+    #pbv-images button[aria-expanded="true"] { background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
+    #pbv-toggle { margin-left:auto; }
+    #pbv-images span { flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      padding:2px 6px;border-radius:6px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);font:12px sans-serif; }
+    #pbv-images span:empty { display:none; }
+    /* 普段は右下の小さな「☰」だけ。押したときだけ1行のバーを開き、縦表示は上端を下げて本文に重ねない */
+    #pbv-menu { width:34px;height:34px;padding:0!important;border-radius:50%!important;opacity:.8; }
+    #pbv-images:not(.pbv-open) #pbv-menu { opacity:.5; }
+    #pbv-images:not(.pbv-open) { left:auto;right:4px;top:auto;bottom:60px;height:auto;padding:0; }
+    #pbv-images:not(.pbv-open) > :not(#pbv-menu):not(span) { display:none!important; }
+    #pbv-images:not(.pbv-open) > span { order:-1;max-width:70vw;animation:pbv-fade 4s forwards; }
+    @keyframes pbv-fade { 0%,70% { opacity:1; } 100% { opacity:0;visibility:hidden; } }
+    #pbv-images.pbv-open { background:var(--pbv-bg,#fff);border-bottom:1px solid #8886; }
+    #pbv-gallery { position:fixed;left:8px;top:96px;max-height:calc(100% - 104px);z-index:2147483647;
+      width:min(420px,calc(100% - 16px));box-sizing:border-box;overflow:auto;padding:8px;
+      display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;align-content:start;
+      background:var(--pbv-bg,#fff);border:1px solid #1a73e8;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.25); }
+    #pbv-gallery[hidden] { display:none!important; }
+    #pbv-gallery button { display:flex;flex-direction:column;gap:4px;padding:4px;border:1px solid #8886;
+      border-radius:6px;background:transparent;color:var(--pbv-ui,#222);cursor:pointer;font:12px sans-serif; }
+    #pbv-gallery img { width:100%;aspect-ratio:3/4;object-fit:cover;background:#8884; }
+    #pbv-pages .pbv-horizontal svg { display:block;width:100%!important;
+      height:auto!important;max-width:100%; }
+  `;
+  document.head.append(style);
+  const toggle = document.createElement('button');
+  toggle.id = 'pbv-toggle';
+  toggle.textContent = '上下スクロール';
+  toggle.setAttribute('aria-pressed', 'false');
+  const view = document.createElement('section');
+  view.id = 'pbv-view';
+  view.hidden = true;
+  view.setAttribute('aria-label', '上下スクロール読書');
+  const pages = document.createElement('div');
+  pages.id = 'pbv-pages';
+  view.append(pages);
+  document.body.append(view);
+  const imageTools = document.createElement('nav');
+  imageTools.id = 'pbv-images';
+  imageTools.hidden = false;
+  imageTools.setAttribute('aria-label', '挿絵へ移動');
+  const list = document.createElement('button'), gallery = document.createElement('div');
+  const back = document.createElement('button'), menu = document.createElement('button');
+  const status = document.createElement('span');
+  gallery.id = 'pbv-gallery';
+  gallery.hidden = true;
+  menu.id = 'pbv-menu';
+  menu.textContent = '☰';
+  menu.setAttribute('aria-label', '操作メニュー');
+  back.textContent = '元の位置';
+  back.disabled = true;
+  status.setAttribute('role', 'status');
+  imageTools.append(menu, list, back, status, toggle);
+  document.body.append(imageTools, gallery);
+  let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
+  let ended = {};
+  let context, pendingJump, landing, focusImage;
+  let index = streamed;
+  const seen = new Set();
+  refresh = () => { saveIndex(); renderList(); };
+  // 取得済みの挿絵位置をサムネ付きで一覧にする。押すとその挿絵へ直接移動する。
+  function renderList() {
+    const n = index.images.length;
+    list.textContent = `${n ? `挿絵（${n}）` : '挿絵（取得中）'} ${gallery.hidden ? '▾' : '▴'}`;
+    list.setAttribute('aria-expanded', String(!gallery.hidden));
+    if (!gallery.hidden) fillGallery();
+  }
+  function fillGallery() {
+    const signature = index.images.map(item => item.pg + (item.src ? '+' : '')).join();
+    if (gallery.dataset.signature === signature) return;
+    gallery.dataset.signature = signature;
+    gallery.replaceChildren(...index.images.map((item, i) => {
+      const button = document.createElement('button');
+      button.dataset.pg = item.pg;
+      if (item.src) {
+        const img = new Image();
+        img.loading = 'lazy'; img.alt = ''; img.src = item.src;
+        button.append(img);
+      }
+      button.append(`挿絵 ${i + 1}`);
+      return button;
+    }));
+  }
+  function gotoImage(pg) {
+    if (busy) return;
+    if (!context) { status.textContent = '本文の読み込みを待っています'; return; }
+    busy = true; list.disabled = true; back.disabled = false;
+    status.textContent = '挿絵へ移動…';
+    pendingJump = () => window.parent.postMessage({ type: 'pbv-goto', pg, mode: active }, 'https://play.google.com');
+    window.parent.postMessage({ type: 'pbv-mark', mode: active }, 'https://play.google.com');
+    timeout = setTimeout(() => { pendingJump = null; finish('位置を保存できませんでした。再試行'); }, 3000);
+  }
+  // 上下の端に近づいたら次・前のページを自動で読み込む。
+  function fill() {
+    if (!active || busy || landing) return;
+    const top = view.scrollTop < 180, bottom = view.scrollHeight - view.scrollTop - view.clientHeight < 180;
+    if (top && !ended[-1]) load(-1);
+    else if (bottom && !ended[1]) load(1);
+  }
+  function imageLocation(page) {
+    const image = [...page.querySelectorAll('img, svg image')].find(isIllustration);
+    if (!image) return null;
+    const anchors = [...page.querySelectorAll('[id]')].filter(a => /^GBS\./.test(a.id)
+      && (a.compareDocumentPosition(image) & 4));
+    const pg = (anchors.at(-1)?.id || pageLocation(page)).replace(/_\d+$/, '');
+    return order(pg) === null ? null : { pg, order: order(pg) };
+  }
+  function isIllustration(img) {
+    const rect = img.getBoundingClientRect();
+    const clip = img.closest?.('reader-rendered-page')?.getBoundingClientRect();
+    if (clip) return Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left) >= 200
+      && Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top) >= 200;
+    return Math.max(rect.width, Number(img.getAttribute('width')) || 0, img.naturalWidth || 0) >= 200
+      && Math.max(rect.height, Number(img.getAttribute('height')) || 0, img.naturalHeight || 0) >= 200;
+  }
+  function pageLocation(page) {
+    return page.querySelector('.gb-segment')?.getAttribute('ocean-position')?.replace(/\+(\d+)$/, '_$1')
+      || page.querySelector('[id^="GBS."]')?.id || '';
+  }
+  function saveIndex() {
+    if (!context) return;
+    window.parent.postMessage({ type: 'pbv-index', index }, 'https://play.google.com');
+  }
+  function rememberImages() {
+    for (const page of document.querySelectorAll('reader-pages reader-page.-gb-loaded')) {
+      const found = imageLocation(page);
+      if (found && !index.images.some(item => item.pg === found.pg)) index.images.push(found);
+    }
+    index.images.sort((a, b) => a.order - b.order);
+    saveIndex();
+    renderList();
+  }
+  window.addEventListener('message', event => {
+    if (event.origin !== 'https://play.google.com' || event.source !== window.parent) return;
+    if (event.data?.type === 'pbv-marked') {
+      clearTimeout(timeout);
+      const begin = pendingJump;
+      pendingJump = null;
+      begin?.();
+      return;
+    }
+    if (event.data?.type !== 'pbv-context') return;
+    context = event.data;
+    if (manifest && manifest.metadata.volume_id !== context.id) return;
+    mergeIndex(index, context.index);
+    rememberImages();
+    if (typeof context.landing === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(context.landing))
+      landing = { signature: '', steps: 0 };
+    if (context.bookmark) back.disabled = false;
+    if (context.mode && !active) toggle.click();
+    if (landing) setTimeout(append, 350);
+  });
+  window.parent.postMessage({ type: 'pbv-context' }, 'https://play.google.com');
+  renderList();
+
+  function shown() {
+    return [...document.querySelectorAll('reader-pages reader-page.shown')]
+      .filter(p => p.classList.contains('-gb-loaded') && p.querySelector('reader-rendered-page'));
+  }
+  function resize() {
+    // 画像ページは、左右の余白（画面幅で変わる）を除いた幅に収める。
+    const padding = parseFloat(getComputedStyle(pages).paddingLeft) * 2;
+    for (const sheet of pages.children) {
+      sheet.style.zoom = sheet.classList.contains('pbv-horizontal') ? '1'
+        : String(Math.min(1, (view.clientWidth - padding - 4) / Number(sheet.dataset.width)));
+    }
+  }
+  // リーダーが今表示している本文の文字色・書体・サイズ・背景を、縦表示へ反映する。
+  function syncTheme() {
+    const page = shown().find(p => p.querySelector('.gb-segment p'));
+    if (!page) return;
+    const text = [...page.querySelectorAll('.gb-segment p')]
+      .reduce((a, b) => b.textContent.length > a.textContent.length ? b : a);
+    const style = getComputedStyle(text), size = parseFloat(style.fontSize);
+    const rgb = c => c.match(/[\d.]+/g)?.map(Number) ?? [];
+    let bg;
+    for (let el = text; el && !bg; el = el.parentElement || el.getRootNode().host) {
+      const [r, g, b, a = 1] = rgb(getComputedStyle(el).backgroundColor);
+      if (r !== undefined && a > 0.5) bg = `rgb(${r}, ${g}, ${b})`;
+    }
+    const [r, g, b] = rgb(style.color);
+    // 背景が取れず文字が明るい場合は、読めなくならないよう暗い背景にする。
+    bg ||= (r + g + b) / 3 > 128 ? 'rgb(17, 17, 17)' : 'rgb(255, 255, 255)';
+    // 背景と文字を別々の要素から読むため食い違うことがある。追加UIは常に背景に対して読める色にし、
+    // 本文も文字色が背景と近すぎる場合はその色に置き換える。
+    const lum = ([x, y, z]) => (0.2126 * x + 0.7152 * y + 0.0722 * z) / 255;
+    const ui = lum(rgb(bg)) > 0.5 ? '#222' : '#eee';
+    const fg = Math.abs(lum(rgb(bg)) - lum([r, g, b])) >= 0.4 ? style.color : ui;
+    for (const el of [view, imageTools, gallery]) {
+      el.style.setProperty('--pbv-bg', bg);
+      el.style.setProperty('--pbv-ui', ui);
+      el.style.setProperty('--pbv-fg', fg);
+      el.style.setProperty('--pbv-font', style.fontFamily);
+      if (size >= 10 && size <= 60) el.style.setProperty('--pbv-size', `${size}px`);
+    }
+  }
+  function append() {
+    rememberImages();
+    if (adjustLanding()) return;
+    if (!active) return;
+    syncTheme();
+    const height = view.scrollHeight, top = view.scrollTop;
+    const visible = shown();
+    const signature = visible.map(p => p.id).join('|');
+    let added = false, reset = false;
+    if (!busy && seen.size && visible.length && visible.every(p => !seen.has(p.id))) {
+      // 目次やリンクでリーダーが離れた位置へ移動した。縦表示を作り直す。
+      pages.replaceChildren(); seen.clear(); ended = {};
+      reset = true;
+    }
+    // ponytail: 保持ページ数に比例してメモリを使う。長時間読む場合は表示を一度閉じて再開。
+    for (const source of visible) {
+      if (seen.has(source.id)) continue;
+      const rect = source.getBoundingClientRect();
+      if (!rect.width || !rect.height) continue;
+      const sheet = source.cloneNode(true);
+      sheet.classList.remove('shown');
+      sheet.classList.add('pbv-sheet');
+      if (source.classList.contains('text-mode')) sheet.classList.add('pbv-horizontal');
+      sheet.dataset.width = String(rect.width);
+      sheet.dataset.page = source.id;
+      const segment = source.querySelector('.gb-segment');
+      sheet.dataset.continues = String(/\+[1-9]\d*$/.test(segment?.getAttribute('ocean-position') || ''));
+      sheet.style.cssText = `width:${rect.width}px;height:${rect.height}px;direction:${getComputedStyle(source).direction}`;
+      for (const el of [sheet, ...sheet.querySelectorAll('[id]')]) el.removeAttribute('id');
+      sheet.querySelectorAll('reader-page-overlay, reader-icon-overlay, script').forEach(el => el.remove());
+      // 複製したリンクはリーダー本来の処理を失うので、クリック時に元のリンクを探せるよう印を付ける。
+      sheet.querySelectorAll('a').forEach((a, i) => { a.dataset.pbvPage = source.id; a.dataset.pbvIndex = i; });
+      const after = [...pages.children].find(p => p.dataset.page.localeCompare(source.id, undefined, { numeric: true }) > 0);
+      pages.insertBefore(sheet, after || null);
+      seen.add(source.id);
+      added = true;
+    }
+    if (added) {
+      // Googleが示す段落途中のオフセットがある場合だけ、前ページの段落につなぐ。
+      const sheets = [...pages.children];
+      for (let i = 1; i < sheets.length; i++) {
+        const current = sheets[i];
+        if (current.dataset.continues !== 'true' || current.dataset.joined) continue;
+        const paragraphs = p => [...p.querySelectorAll('p')].filter(el => el.textContent.trim());
+        const left = sheets.slice(0, i).flatMap(paragraphs).at(-1), right = paragraphs(current)[0];
+        if (left && right) {
+          left.append(...right.childNodes);
+          right.remove();
+          current.dataset.joined = 'true';
+        }
+      }
+      clearTimeout(timeout);
+      busy = false;
+      list.disabled = false;
+      if (status.textContent.startsWith('本文の読み込み')) status.textContent = '';
+      resize();
+      if (reset) { direction = 1; view.scrollTop = 0; }
+      if (focusImage) {
+        // 着地直後は、挿絵が画面に入るようにスクロールする。
+        focusImage = false;
+        const img = [...pages.querySelectorAll('img, svg')].find(el => el.getBoundingClientRect().width >= 200);
+        if (img) view.scrollTop += img.getBoundingClientRect().top - view.getBoundingClientRect().top - 64;
+      }
+      if (!reset && direction === -1) view.scrollTop = top + view.scrollHeight - height;
+      lastScroll = view.scrollTop;
+      fill();
+    } else if (busy && signature && signature !== lastSignature) {
+      step();
+    }
+  }
+  function finish(message) {
+    clearTimeout(timeout);
+    if (landing) {
+      landing = null;
+      window.parent.postMessage({ type: 'pbv-landed' }, 'https://play.google.com');
+    }
+    pendingJump = null;
+    busy = false;
+    status.textContent = message;
+    list.disabled = false;
+  }
+  function adjustLanding() {
+    if (!landing) return false;
+    const visible = shown();
+    if (!visible.length || visible.length !== document.querySelectorAll('reader-pages reader-page.shown').length) return true;
+    if (visible.some(page => [...page.querySelectorAll('img, svg image')].some(isIllustration))) {
+      finish('挿絵に移動しました'); focusImage = active; status.textContent = '挿絵に移動しました'; return false;
+    }
+    const signature = visible.map(page => page.id).join('|');
+    if (signature === landing.signature) return true;
+    // アンカー直後の画像が次の見開きに送られた場合だけ、最大2回補正する。
+    if (landing.steps >= 2) {
+      finish('挿絵の直前に移動しました'); status.textContent = '挿絵の直前に移動しました'; return false;
+    }
+    landing.signature = signature; landing.steps++;
+    busy = true; direction = 1;
+    list.disabled = true;
+    status.textContent = '挿絵の表示位置を調整…';
+    step();
+    return true;
+  }
+  function step() {
+    const label = direction === -1 ? '前のページ' : '次のページ';
+    const english = direction === -1 ? 'Previous page' : 'Next page';
+    const button = document.querySelector(`reader-app button[aria-label="${label}"], reader-app button[aria-label="${english}"]`);
+    if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') {
+      ended[direction] = true;
+      finish(`${label}がありません`);
+      return;
+    }
+    lastSignature = shown().map(p => p.id).join('|');
+    clearTimeout(timeout);
+    button.click();
+    timeout = setTimeout(() => finish('追加できませんでした。再試行'), 10000);
+  }
+  function load(value) {
+    if (!active || busy) return;
+    direction = value;
+    busy = true;
+    list.disabled = true;
+    step();
+  }
+  toggle.addEventListener('click', () => {
+    active = !active;
+    view.hidden = !active;
+    toggle.textContent = active ? '通常表示' : '上下スクロール';
+    imageTools.classList.remove('pbv-open');
+    view.classList.remove('pbv-padded');
+    toggle.setAttribute('aria-pressed', String(active));
+    clearTimeout(timeout);
+    busy = false;
+    pendingJump = null;
+    back.disabled = !context?.bookmark;
+    status.textContent = '';
+    list.disabled = false;
+    if (active) {
+      pages.replaceChildren();
+      seen.clear();
+      ended = {};
+      direction = 1;
+      if (!shown().length) status.textContent = '本文の読み込みを待っています…';
+      append();
+      view.scrollTop = 0;
+      lastScroll = 0;
+    }
+  });
+  menu.addEventListener('click', () => {
+    const open = imageTools.classList.toggle('pbv-open');
+    view.classList.toggle('pbv-padded', open);
+    if (!open) gallery.hidden = true;
+    renderList();
+  });
+  list.addEventListener('click', () => {
+    gallery.hidden = !gallery.hidden;
+    renderList();
+  });
+  gallery.addEventListener('click', event => {
+    const pg = event.target.closest('button')?.dataset.pg;
+    if (!pg) return;
+    gallery.hidden = true;
+    renderList();
+    gotoImage(pg);
+  });
+  // 複製ページのリンクをそのまま開くと403になる。既定の遷移を止め、リーダー内の元のリンクを押し直す。
+  pages.addEventListener('click', event => {
+    const link = event.target.closest?.('a');
+    if (!link) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = [...document.querySelectorAll('reader-pages reader-page')].find(p => p.id === link.dataset.pbvPage);
+    const original = source?.querySelectorAll('a')[Number(link.dataset.pbvIndex)];
+    if (original) original.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    else status.textContent = 'このリンクは通常表示で開いてください';
+  }, true);
+  back.addEventListener('click', () => {
+    if (context) window.parent.postMessage({ type: 'pbv-return' }, 'https://play.google.com');
+  });
+  view.addEventListener('scroll', () => {
+    const delta = view.scrollTop - lastScroll;
+    lastScroll = view.scrollTop;
+    // ユーザーが端へ向かってスクロールした場合は、終端判定をやり直す。
+    if (delta) { ended[delta < 0 ? -1 : 1] = false; fill(); }
+  }, { passive: true });
+  // リーダーの仮想ページ更新だけを監視し、自分が追加したページは監視しない。
+  function watch() {
+    const reader = document.querySelector('reader-pages');
+    if (!reader) return false;
+    new MutationObserver(() => {
+      clearTimeout(debounce);
+      // 読込完了したページだけを使い、探索中の待ち時間を短くする。
+      debounce = setTimeout(append, busy ? 100 : 350);
+    }).observe(reader, { childList: true, subtree: true, attributes: true, characterData: true });
+    return true;
+  }
+  if (!watch()) {
+    const startup = new MutationObserver(() => {
+      if (watch()) { startup.disconnect(); append(); }
+    });
+    startup.observe(document.body, { childList: true, subtree: true });
+  }
+  window.addEventListener('resize', resize);
+  // ponytail: 配色変更はページ更新を伴わないことがあるため、1秒ごとに設定を読み直す。
+  setInterval(syncTheme, 1000);
+  }
+})();
