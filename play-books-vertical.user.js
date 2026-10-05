@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.11.0
+// @version      1.11.1
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -151,7 +151,7 @@
     #pbv-view { position:fixed;inset:56px 0 0;z-index:2147483646;
       overflow:auto;background:var(--pbv-bg,#fff);overscroll-behavior:contain;overflow-anchor:none; }
     #pbv-view[hidden] { display:none!important; }
-    #pbv-view.pbv-padded { inset:56px 0 var(--pbv-sheet,0px); }
+    #pbv-view.pbv-padded { box-sizing:border-box;padding-bottom:var(--pbv-sheet,0px); }
     #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
       display:flex;flex-direction:column;align-items:center;gap:0; }
     @media (max-width:600px) { #pbv-pages { padding:0 3px; } }
@@ -200,21 +200,21 @@
     #pbv-images span:empty { display:none; }
     #pbv-images:not(.pbv-open) > span { animation:pbv-fade 4s forwards; }
     @keyframes pbv-fade { 0%,70% { opacity:1; } 100% { opacity:0;visibility:hidden; } }
-    #pbv-panel { width:100%;box-sizing:border-box;display:grid;gap:12px;max-height:62vh;overflow:auto;
-      padding:14px 14px calc(14px + env(safe-area-inset-bottom));
+    #pbv-panel { width:100%;box-sizing:border-box;display:grid;gap:8px;max-height:60vh;overflow:auto;
+      padding:12px 12px calc(12px + env(safe-area-inset-bottom));
       background:var(--pbv-bg,#fff);border-top:1px solid #8886;border-radius:18px 18px 0 0;
       box-shadow:0 -4px 18px rgba(0,0,0,.3); }
     #pbv-images:not(.pbv-open) #pbv-panel { display:none; }
-    #pbv-panel .pbv-row { display:flex;gap:10px; }
+    #pbv-panel .pbv-row { display:flex;gap:8px; }
     #pbv-panel .pbv-row > * { flex:1 1 0;min-width:0; }
     #pbv-panel .pbv-field[hidden] { display:none; }
     #pbv-panel label { display:block;margin:0 0 4px;font-size:12px;opacity:.75; }
-    #pbv-panel button, #pbv-panel select { box-sizing:border-box;width:100%;min-height:46px;padding:0 12px;
+    #pbv-panel button, #pbv-panel select { box-sizing:border-box;width:100%;min-height:42px;padding:0 8px;
       border:1px solid #8886;border-radius:12px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);
-      font:15px sans-serif;cursor:pointer; }
+      font:14px sans-serif;cursor:pointer;text-overflow:ellipsis; }
     #pbv-panel button:disabled { opacity:.45;cursor:default; }
-    #pbv-panel input[type=range] { width:100%;min-height:32px; }
-    #pbv-panel #pbv-speak { min-height:54px;font-size:17px;font-weight:bold;background:#1a73e8;border-color:#1a73e8;color:#fff; }
+    #pbv-panel input[type=range] { width:100%;min-height:28px;margin:0; }
+    #pbv-panel #pbv-speak { min-height:50px;font-size:17px;font-weight:bold;background:#1a73e8;border-color:#1a73e8;color:#fff; }
     #pbv-panel #pbv-speak.on { background:#d93025;border-color:#d93025; }
     #pbv-panel button[aria-pressed="true"], #pbv-panel button[aria-expanded="true"] {
       background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
@@ -271,7 +271,7 @@
   const rateField = field('', rateInput), engineField = field('読み上げエンジン', engineSel);
   const voiceField = field('声', voiceSel);
   const panel = mk('div', 'pbv-panel');
-  panel.append(row(speak), row(toggle, back), row(list), rateField, engineField, voiceField);
+  panel.append(row(speak), row(toggle, back, list), rateField, row(engineField, voiceField));
   imageTools.append(status, menu, panel);
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
