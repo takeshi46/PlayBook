@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.13.0
+// @version      1.13.1
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -220,7 +220,7 @@
       background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
     reader-account-indicator, reader-app-bar button[aria-label*="全画面"],
     reader-app-bar button[aria-label="その他のオプション"], reader-app-bar button[aria-label="More options"] { display:none!important; }
-    body.pbv-quiet .cdk-overlay-container { visibility:hidden!important; }
+    body.pbv-quiet .overflow-menu-dialog-container, body.pbv-quiet .cdk-overlay-backdrop { visibility:hidden!important; }
     #pbv-display { position:static;flex:none;width:40px;height:40px;margin:0;padding:0;border:0;border-radius:50%;
       background:transparent;font:bold 17px sans-serif;cursor:pointer; }
     #pbv-menu.pbv-bar { position:static;flex:none;width:40px;height:40px;margin:0;border:0;border-radius:50%;
@@ -799,19 +799,32 @@
       }
     }
   }
-  // 非表示にした「⋮」を裏で押して、中の「表示オプション」を開く（メニューは見せない）。
+  // 非表示にした「⋮」を裏で押して、中の「表示オプション」を開く。開いている間にもう一度押すと閉じる。
+  const displayPane = () => [...document.querySelectorAll('.cdk-overlay-pane.-gb-titled-dialog')]
+    .find(p => /表示オプション|Display options/i.test(p.textContent));
+  const wait = ms => new Promise(r => setTimeout(r, ms));
   displayBtn.addEventListener('click', async () => {
+    const opened = displayPane();
+    if (opened) {
+      const close = [...opened.querySelectorAll('button')].find(b => /^\s*close\s*$/i.test(b.textContent)
+        || /閉じる|close/i.test(b.getAttribute('aria-label') || ''));
+      if (close) close.click();
+      else opened.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+      return;
+    }
     const more = document.querySelector('reader-app-bar button[aria-label="その他のオプション"], reader-app-bar button[aria-label="More options"]');
     if (!more) { status.textContent = '表示オプションを開けません'; return; }
-    document.body.classList.add('pbv-quiet');
+    document.body.classList.add('pbv-quiet');   // 「⋮」のメニューだけ見せない
     more.click();
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 50));
-      const item = [...document.querySelectorAll('.cdk-overlay-container button')]
-        .find(b => /表示オプション|Display options/i.test(b.textContent));
+    for (let i = 0; i < 40; i++) {
+      await wait(15);
+      const item = document.querySelector('.cdk-overlay-container .display-options-link')
+        || [...document.querySelectorAll('.cdk-overlay-container button')].find(b => /表示オプション|Display options/i.test(b.textContent));
       if (item) { item.click(); break; }
     }
-    setTimeout(() => document.body.classList.remove('pbv-quiet'), 500);
+    // メニューが消えるまで隠す。表示オプション自体は隠さないので、出た瞬間に見える。
+    for (let i = 0; i < 40 && document.querySelector('.overflow-menu-dialog-container'); i++) await wait(15);
+    document.body.classList.remove('pbv-quiet');
   });
   placeMenu();
   setInterval(() => { syncTheme(); placeMenu(); }, 1000);
