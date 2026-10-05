@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.9.3
+// @version      1.10.0
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -520,6 +520,14 @@
   let rate = Number(store('pbv-rate')) || 1, voiceName = store('pbv-voice') || '';
   let speaking = false, token = 0, current = null, quick = 0;
   const synth = window.speechSynthesis;
+  // PlayBook アプリ（WebView）内なら、端末のTTSをアプリ側で直接使う（画面オフでも継続できる）。
+  const native = window.PBNative, waiting = {};
+  let uid = 0;
+  if (native) native.onmessage = e => {
+    const m = JSON.parse(e.data), w = waiting[m.id];
+    delete waiting[m.id];
+    if (m.e === 'end') w?.done(); else if (m.e === 'error') w?.fail(m.m);
+  };
   const voices = () => (synth?.getVoices() ?? []).filter(v => /^ja/i.test(v.lang));
   const voice = () => voices().find(v => v.name === voiceName) || voices()[0];
   function uiLabels() {
@@ -539,6 +547,7 @@
   function stopSpeech() {
     speaking = false; token++; current?.classList.remove('pbv-tts'); current = null;
     synth?.cancel(); uiLabels();
+    if (native) { native.postMessage(JSON.stringify({ c: 'stop' })); for (const k in waiting) delete waiting[k]; }
   }
   function nextParagraph(me) {
     if (me !== token) return;
@@ -562,6 +571,12 @@
     (function say(k) {
       if (me !== token) return;
       if (k >= sentences.length) return nextParagraph(me);
+      if (native) {
+        const id = ++uid;
+        waiting[id] = { done: () => say(k + 1), fail: m => { stopSpeech(); status.textContent = `読み上げエラー: ${m}`; } };
+        native.postMessage(JSON.stringify({ c: 'speak', id, t: sentences[k], r: rate }));
+        return;
+      }
       const u = new SpeechSynthesisUtterance(sentences[k]);
       u.lang = 'ja-JP'; u.rate = rate; if (voice()) u.voice = voice();
       const t0 = Date.now();
@@ -580,7 +595,7 @@
     })(0);
   }
   speak.addEventListener('click', () => {
-    if (!synth) { status.textContent = 'この環境は読み上げ非対応です'; return; }
+    if (!synth && !native) { status.textContent = 'この環境は読み上げ非対応です'; return; }
     if (speaking) { stopSpeech(); return; }
     if (!active) toggle.click();
     speaking = true; token++; current = null; quick = 0; uiLabels();
@@ -594,6 +609,7 @@
     voiceName = v[(v.findIndex(x => x.name === voice()?.name) + 1) % v.length].name; store('pbv-voice', voiceName); uiLabels();
   });
   synth?.addEventListener?.('voiceschanged', uiLabels);
+  voiceBtn.hidden = !!native;   // アプリでは端末設定の声を使う
   uiLabels();
   toggle.addEventListener('click', () => {
     if (speaking && active) stopSpeech();   // 通常表示へ戻る前に読み上げを止める
