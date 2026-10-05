@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.9.1
+// @version      1.9.2
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -518,7 +518,7 @@
   const RATES = [0.8, 1, 1.25, 1.5, 2];
   const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch {} return v; };
   let rate = Number(store('pbv-rate')) || 1, voiceName = store('pbv-voice') || '';
-  let speaking = false, token = 0, current = null;
+  let speaking = false, token = 0, current = null, quick = 0;
   const voices = () => speechSynthesis.getVoices().filter(v => /^ja/i.test(v.lang));
   const voice = () => voices().find(v => v.name === voiceName) || voices()[0];
   function uiLabels() {
@@ -563,8 +563,18 @@
       if (k >= sentences.length) return nextParagraph(me);
       const u = new SpeechSynthesisUtterance(sentences[k]);
       u.lang = 'ja-JP'; u.rate = rate; if (voice()) u.voice = voice();
-      u.onend = () => say(k + 1);
-      u.onerror = e => { if (!/canceled|interrupted/.test(e.error)) say(k + 1); };
+      const t0 = Date.now();
+      u.onend = () => {
+        // 音が出ないまま即終了する環境では、高速で先へ進まず原因を表示して止める。
+        if (Date.now() - t0 < 120 && sentences[k].length > 8 && ++quick >= 3) {
+          stopSpeech(); status.textContent = `音が出ません（声${speechSynthesis.getVoices().length}件）`; return;
+        }
+        say(k + 1);
+      };
+      u.onerror = e => {
+        if (/canceled|interrupted/.test(e.error)) return;
+        stopSpeech(); status.textContent = `読み上げエラー: ${e.error}（声${speechSynthesis.getVoices().length}件）`;
+      };
       speechSynthesis.speak(u);
     })(0);
   }
@@ -572,7 +582,7 @@
     if (!('speechSynthesis' in window)) { status.textContent = 'この環境は読み上げ非対応です'; return; }
     if (speaking) { stopSpeech(); return; }
     if (!active) toggle.click();
-    speaking = true; token++; current = null; uiLabels();
+    speaking = true; token++; current = null; quick = 0; uiLabels();
     setTimeout(() => nextParagraph(token), 400);
   });
   rateBtn.addEventListener('click', () => {
