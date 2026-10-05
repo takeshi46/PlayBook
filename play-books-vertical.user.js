@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.10.1
+// @version      1.11.0
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -151,7 +151,7 @@
     #pbv-view { position:fixed;inset:56px 0 0;z-index:2147483646;
       overflow:auto;background:var(--pbv-bg,#fff);overscroll-behavior:contain;overflow-anchor:none; }
     #pbv-view[hidden] { display:none!important; }
-    #pbv-view.pbv-padded { inset:92px 0 0; }
+    #pbv-view.pbv-padded { inset:56px 0 var(--pbv-sheet,0px); }
     #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
       display:flex;flex-direction:column;align-items:center;gap:0; }
     @media (max-width:600px) { #pbv-pages { padding:0 3px; } }
@@ -185,26 +185,41 @@
     #pbv-pages .pbv-horizontal [style*="display: none"] { display:none!important; }
     #pbv-pages .pbv-horizontal img { max-width:100%;height:auto; }
     /* 操作ボタンはリーダーのヘッダー直下の1行にまとめ、本文に重ねない（スマホ対応） */
-    #pbv-images { position:fixed;left:0;right:0;top:56px;height:36px;z-index:2147483647;box-sizing:border-box;
-      display:flex;align-items:center;gap:6px;padding:0 8px;pointer-events:none; }
+    /* 操作は右下の「☰」から。押すと下からパネルが開く（大きいボタン・見出し付き）。 */
+    #pbv-images { position:fixed;left:0;right:0;bottom:0;z-index:2147483647;pointer-events:none;
+      display:flex;flex-direction:column;align-items:flex-end;gap:8px;color:var(--pbv-ui,#222);font:14px/1.4 sans-serif; }
     #pbv-images > * { pointer-events:auto; }
-    #pbv-images button { flex:none;min-height:30px;padding:0 10px;border:1px solid #8886;border-radius:8px;
-      background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);cursor:pointer;font:13px sans-serif;white-space:nowrap; }
-    #pbv-images button:disabled { opacity:0.5;cursor:default; }
-    #pbv-images button[aria-expanded="true"] { background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
-    #pbv-images.pbv-open { overflow-x:auto;scrollbar-width:none; }
-    #pbv-images span { flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-      padding:2px 6px;border-radius:6px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);font:12px sans-serif; }
+    #pbv-images:not(.pbv-open) { bottom:60px;padding-right:12px;box-sizing:border-box; }
+    #pbv-menu { flex:none;width:46px;height:46px;border-radius:50%;border:1px solid #8886;margin-right:12px;
+      background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);font-size:22px;cursor:pointer;
+      box-shadow:0 2px 8px rgba(0,0,0,.3);opacity:.85; }
+    #pbv-images:not(.pbv-open) #pbv-menu { margin-right:0;opacity:.6; }
+    #pbv-images span { align-self:center;max-width:90vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      padding:6px 12px;border-radius:14px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);
+      border:1px solid #8886;font:13px sans-serif; }
     #pbv-images span:empty { display:none; }
-    /* 普段は右下の小さな「☰」だけ。押したときだけ1行のバーを開き、縦表示は上端を下げて本文に重ねない */
-    #pbv-menu { width:34px;height:34px;padding:0!important;border-radius:50%!important;opacity:.8; }
-    #pbv-images:not(.pbv-open) #pbv-menu { opacity:.5; }
-    #pbv-images:not(.pbv-open) { left:auto;right:4px;top:auto;bottom:60px;height:auto;padding:0; }
-    #pbv-images:not(.pbv-open) > :not(#pbv-menu):not(span) { display:none!important; }
-    #pbv-images:not(.pbv-open) > span { order:-1;max-width:70vw;animation:pbv-fade 4s forwards; }
+    #pbv-images:not(.pbv-open) > span { animation:pbv-fade 4s forwards; }
     @keyframes pbv-fade { 0%,70% { opacity:1; } 100% { opacity:0;visibility:hidden; } }
-    #pbv-images.pbv-open { background:var(--pbv-bg,#fff);border-bottom:1px solid #8886; }
-    #pbv-gallery { position:fixed;left:8px;top:96px;max-height:calc(100% - 104px);z-index:2147483647;
+    #pbv-panel { width:100%;box-sizing:border-box;display:grid;gap:12px;max-height:62vh;overflow:auto;
+      padding:14px 14px calc(14px + env(safe-area-inset-bottom));
+      background:var(--pbv-bg,#fff);border-top:1px solid #8886;border-radius:18px 18px 0 0;
+      box-shadow:0 -4px 18px rgba(0,0,0,.3); }
+    #pbv-images:not(.pbv-open) #pbv-panel { display:none; }
+    #pbv-panel .pbv-row { display:flex;gap:10px; }
+    #pbv-panel .pbv-row > * { flex:1 1 0;min-width:0; }
+    #pbv-panel .pbv-field[hidden] { display:none; }
+    #pbv-panel label { display:block;margin:0 0 4px;font-size:12px;opacity:.75; }
+    #pbv-panel button, #pbv-panel select { box-sizing:border-box;width:100%;min-height:46px;padding:0 12px;
+      border:1px solid #8886;border-radius:12px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);
+      font:15px sans-serif;cursor:pointer; }
+    #pbv-panel button:disabled { opacity:.45;cursor:default; }
+    #pbv-panel input[type=range] { width:100%;min-height:32px; }
+    #pbv-panel #pbv-speak { min-height:54px;font-size:17px;font-weight:bold;background:#1a73e8;border-color:#1a73e8;color:#fff; }
+    #pbv-panel #pbv-speak.on { background:#d93025;border-color:#d93025; }
+    #pbv-panel button[aria-pressed="true"], #pbv-panel button[aria-expanded="true"] {
+      background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
+    .gb-segment p.pbv-tts { background:rgba(26,115,232,.22)!important; }
+    #pbv-gallery { position:fixed;left:8px;top:64px;max-height:calc(100% - 72px - var(--pbv-sheet,0px));z-index:2147483647;
       width:min(420px,calc(100% - 16px));box-sizing:border-box;overflow:auto;padding:8px;
       display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;align-content:start;
       background:var(--pbv-bg,#fff);border:1px solid #1a73e8;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.25); }
@@ -244,10 +259,20 @@
   back.textContent = '元の位置';
   back.disabled = true;
   status.setAttribute('role', 'status');
-  const speak = document.createElement('button'), rateBtn = document.createElement('button');
-  const voiceBtn = document.createElement('button');
-  speak.textContent = '▶ 読む';
-  imageTools.append(menu, status, toggle, list, back, speak, rateBtn, voiceBtn);
+  const mk = (tag, id, text) => { const e = document.createElement(tag); if (id) e.id = id; if (text) e.textContent = text; return e; };
+  const row = (...kids) => { const d = mk('div'); d.className = 'pbv-row'; d.append(...kids); return d; };
+  const field = (title, control) => {
+    const d = mk('div'); d.className = 'pbv-field';
+    const l = mk('label', 0, title); d.append(l, control); d.label = l; return d;
+  };
+  const speak = mk('button', 'pbv-speak', '▶ 読み上げ'), rateInput = mk('input');
+  const engineSel = mk('select'), voiceSel = mk('select');
+  Object.assign(rateInput, { type: 'range', min: '0.5', max: '2.5', step: '0.1' });
+  const rateField = field('', rateInput), engineField = field('読み上げエンジン', engineSel);
+  const voiceField = field('声', voiceSel);
+  const panel = mk('div', 'pbv-panel');
+  panel.append(row(speak), row(toggle, back), row(list), rateField, engineField, voiceField);
+  imageTools.append(status, menu, panel);
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
@@ -492,10 +517,14 @@
     step();
     return true;
   }
+  function pageButton(dir) {
+    const label = dir === -1 ? '前のページ' : '次のページ';
+    const english = dir === -1 ? 'Previous page' : 'Next page';
+    return document.querySelector(`reader-app button[aria-label="${label}"], reader-app button[aria-label="${english}"]`);
+  }
   function step() {
     const label = direction === -1 ? '前のページ' : '次のページ';
-    const english = direction === -1 ? 'Previous page' : 'Next page';
-    const button = document.querySelector(`reader-app button[aria-label="${label}"], reader-app button[aria-label="${english}"]`);
+    const button = pageButton(direction);
     if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') {
       ended[direction] = true;
       finish(`${label}がありません`);
@@ -513,32 +542,49 @@
     list.disabled = true;
     step();
   }
-  // 読み上げ（端末標準TTS）。縦表示の段落を上から文単位で読み、読んでいる段落を強調して追従する。
-  // ponytail: 強調は段落単位。文単位の強調は Range＋CSS.highlights が必要。画面オフ継続はブラウザ依存で未保証。
-  const RATES = [0.8, 1, 1.25, 1.5, 2];
+  // 読み上げ。縦表示でも通常のページ表示でも使える。アプリ内（PBNative）なら端末TTSのエンジン・声を選べる。
+  // ponytail: 強調は段落単位。文単位の強調は Range＋CSS.highlights が必要。
   const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch {} return v; };
   let rate = Number(store('pbv-rate')) || 1, voiceName = store('pbv-voice') || '';
-  let speaking = false, token = 0, current = null, quick = 0;
+  let speaking = false, token = 0, current = null, quick = 0, uid = 0, nativeInfo = null;
   const synth = window.speechSynthesis;
   // PlayBook アプリ（WebView）内なら、端末のTTSをアプリ側で直接使う（画面オフでも継続できる）。
   const native = window.PBNative, waiting = {};
-  let uid = 0;
+  const post = o => native.postMessage(JSON.stringify(o));
   if (native) native.onmessage = e => {
     const m = JSON.parse(e.data);
+    if (m.e === 'info') { nativeInfo = m; fillSelects(); return; }
     if (m.e === 'voice') { status.textContent = `声: ${m.m}`; return; }
     const w = waiting[m.id];
     delete waiting[m.id];
     if (m.e === 'end') w?.done(); else if (m.e === 'error') w?.fail(m.m);
   };
-  const voices = () => (synth?.getVoices() ?? []).filter(v => /^ja/i.test(v.lang));
-  const voice = () => voices().find(v => v.name === voiceName) || voices()[0];
-  function uiLabels() {
-    rateBtn.textContent = `${rate}x`;
-    voiceBtn.textContent = voice() ? `声: ${voice().name.replace(/^(Microsoft|Google)\s*/, '').slice(0, 8)}` : '声: 既定';
-    speak.textContent = speaking ? '■ 停止' : '▶ 読む';
+  const webVoices = () => (synth?.getVoices() ?? []).filter(v => /^ja/i.test(v.lang));
+  function fillSelects() {
+    const fill = (sel, items, cur) => sel.replaceChildren(...items.map(([v, t]) => {
+      const o = new Option(t, v); o.selected = v === cur; return o;
+    }));
+    if (native) {
+      fill(engineSel, (nativeInfo?.engines ?? []).map(x => [x.n, x.l]), nativeInfo?.engine);
+      fill(voiceSel, (nativeInfo?.voices ?? []).map(x => [x.n, x.l]), nativeInfo?.voice);
+    } else {
+      const list = webVoices(), cur = list.find(v => v.name === voiceName) || list[0];
+      fill(voiceSel, list.map(v => [v.name, v.name]), cur?.name);
+    }
+    engineField.hidden = !native || !engineSel.options.length;
+    voiceField.hidden = !voiceSel.options.length;
   }
+  function uiLabels() {
+    rateField.label.textContent = `読み上げ速度 ${rate.toFixed(1)}倍`;
+    rateInput.value = rate;
+    speak.textContent = speaking ? '■ 停止' : '▶ 読み上げ';
+    speak.classList.toggle('on', speaking);
+  }
+  const hasText = p => p.textContent.trim();
+  // 縦表示中は複製した本文、通常表示中はリーダーが今表示している本文を読む。
   function paragraphs() {
-    return [...pages.querySelectorAll('.pbv-horizontal p')].filter(p => p.textContent.trim());
+    return (active ? [...pages.querySelectorAll('.pbv-horizontal p')]
+      : shown().flatMap(pg => [...pg.querySelectorAll('.gb-segment p')])).filter(hasText);
   }
   // ルビ（rt/rp）は除き、漢字側を読む。
   function plain(p) {
@@ -547,28 +593,50 @@
     return copy.textContent.replace(/\s+/g, ' ').trim();
   }
   function stopSpeech() {
-    speaking = false; token++; current?.classList.remove('pbv-tts'); current = null;
+    speaking = false; token++;
+    document.querySelectorAll('.pbv-tts').forEach(el => el.classList.remove('pbv-tts'));
+    current = null;
     synth?.cancel(); uiLabels();
-    if (native) { native.postMessage(JSON.stringify({ c: 'stop' })); for (const k in waiting) delete waiting[k]; }
+    if (native) { post({ c: 'stop' }); for (const k in waiting) delete waiting[k]; }
+  }
+  // 通常表示で、読み終えたら次のページへ進み、表示が切り替わるのを待って続きを読む。
+  function turnPage(me) {
+    const button = pageButton(1);
+    if (!button || button.disabled || button.getAttribute('aria-disabled') === 'true') {
+      stopSpeech(); status.textContent = '最後まで読み上げました'; return;
+    }
+    const before = shown().map(p => p.id).join('|');
+    button.click();
+    let n = 0;
+    (function wait() {
+      if (me !== token) return;
+      const now = shown().map(p => p.id).join('|');
+      if (now && now !== before) { current = null; setTimeout(() => nextParagraph(me), 300); return; }
+      if (++n > 40) { stopSpeech(); status.textContent = 'ページを送れませんでした'; return; }
+      setTimeout(wait, 250);
+    })();
   }
   function nextParagraph(me) {
     if (me !== token) return;
     const list = paragraphs(), i = current ? list.indexOf(current) : -1;
     let next = list[i + 1];
-    if (i < 0 && !current) {
-      // 開始位置: 表示領域の上端以降で最初の段落
+    if (i < 0 && !current && active) {
+      // 縦表示の開始位置: 表示領域の上端以降で最初の段落
       const top = view.getBoundingClientRect().top;
       next = list.find(p => p.getBoundingClientRect().bottom > top + 40);
     }
     if (!next) {
-      // 末尾に達した。次ページを読み込み、追加されるまで待つ。
+      if (!active) return turnPage(me);
+      // 縦表示の末尾に達した。次ページを読み込み、追加されるまで待つ。
       if (ended[1]) { stopSpeech(); status.textContent = '最後まで読み上げました'; return; }
       load(1); setTimeout(() => nextParagraph(me), 600); return;
     }
     current?.classList.remove('pbv-tts');
     current = next; next.classList.add('pbv-tts');
-    next.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    if (list.length - list.indexOf(next) < 4) load(1);   // 先読み
+    if (active) {
+      next.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (list.length - list.indexOf(next) < 4) load(1);   // 先読み
+    }
     const sentences = plain(next).match(/[^。！？!?]+[。！？!?]*[」』）)]*/g) || [];
     (function say(k) {
       if (me !== token) return;
@@ -576,22 +644,22 @@
       if (native) {
         const id = ++uid;
         waiting[id] = { done: () => say(k + 1), fail: m => { stopSpeech(); status.textContent = `読み上げエラー: ${m}`; } };
-        native.postMessage(JSON.stringify({ c: 'speak', id, t: sentences[k], r: rate }));
+        post({ c: 'speak', id, t: sentences[k], r: rate });
         return;
       }
-      const u = new SpeechSynthesisUtterance(sentences[k]);
-      u.lang = 'ja-JP'; u.rate = rate; if (voice()) u.voice = voice();
+      const u = new SpeechSynthesisUtterance(sentences[k]), v = webVoices().find(x => x.name === voiceName) || webVoices()[0];
+      u.lang = 'ja-JP'; u.rate = rate; if (v) u.voice = v;
       const t0 = Date.now();
       u.onend = () => {
         // 音が出ないまま即終了する環境では、高速で先へ進まず原因を表示して止める。
         if (Date.now() - t0 < 120 && sentences[k].length > 8 && ++quick >= 3) {
-          stopSpeech(); status.textContent = `音が出ません（声${(synth?.getVoices().length ?? 0)}件）`; return;
+          stopSpeech(); status.textContent = `音が出ません（声${synth?.getVoices().length ?? 0}件）`; return;
         }
         say(k + 1);
       };
       u.onerror = e => {
         if (/canceled|interrupted/.test(e.error)) return;
-        stopSpeech(); status.textContent = `読み上げエラー: ${e.error}（声${(synth?.getVoices().length ?? 0)}件）`;
+        stopSpeech(); status.textContent = `読み上げエラー: ${e.error}（声${synth?.getVoices().length ?? 0}件）`;
       };
       synth.speak(u);
     })(0);
@@ -599,22 +667,24 @@
   speak.addEventListener('click', () => {
     if (!synth && !native) { status.textContent = 'この環境は読み上げ非対応です'; return; }
     if (speaking) { stopSpeech(); return; }
-    if (!active) toggle.click();
+    // 表示モードは変えない。縦表示なら縦のまま、通常表示なら通常のまま読む。
     speaking = true; token++; current = null; quick = 0; uiLabels();
-    setTimeout(() => nextParagraph(token), 400);
+    setTimeout(() => nextParagraph(token), 300);
   });
-  rateBtn.addEventListener('click', () => {
-    rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length]; store('pbv-rate', rate); uiLabels();
+  rateInput.addEventListener('input', () => { rate = Number(rateInput.value); store('pbv-rate', rate); uiLabels(); });
+  engineSel.addEventListener('change', () => {
+    if (speaking) stopSpeech();
+    post({ c: 'engine', n: engineSel.value }); status.textContent = 'エンジンを切り替え中…';
   });
-  voiceBtn.addEventListener('click', () => {
-    const v = voices(); if (!v.length) return;
-    voiceName = v[(v.findIndex(x => x.name === voice()?.name) + 1) % v.length].name; store('pbv-voice', voiceName); uiLabels();
+  voiceSel.addEventListener('change', () => {
+    if (native) post({ c: 'voice', n: voiceSel.value }); else { voiceName = voiceSel.value; store('pbv-voice', voiceName); }
   });
-  synth?.addEventListener?.('voiceschanged', uiLabels);
-  voiceBtn.hidden = !!native;   // アプリでは端末設定の声を使う
+  synth?.addEventListener?.('voiceschanged', fillSelects);
+  if (native) post({ c: 'info' });
+  fillSelects();
   uiLabels();
   toggle.addEventListener('click', () => {
-    if (speaking && active) stopSpeech();   // 通常表示へ戻る前に読み上げを止める
+    if (speaking) stopSpeech();   // 表示モードが変わるので読み上げを止める
     active = !active;
     view.hidden = !active;
     toggle.textContent = active ? '通常表示' : '上下スクロール';
@@ -638,10 +708,16 @@
       lastScroll = 0;
     }
   });
+  // パネルが開いている間だけ、その高さ分を縦表示とギャラリーの下端から空ける。
+  const sheet = () => document.documentElement.style.setProperty('--pbv-sheet',
+    imageTools.classList.contains('pbv-open') ? `${panel.offsetHeight + 54}px` : '0px');
+  new ResizeObserver(sheet).observe(panel);
   menu.addEventListener('click', () => {
     const open = imageTools.classList.toggle('pbv-open');
     view.classList.toggle('pbv-padded', open);
+    menu.textContent = open ? '✕' : '☰';
     if (!open) gallery.hidden = true;
+    sheet();
     renderList();
   });
   list.addEventListener('click', () => {
