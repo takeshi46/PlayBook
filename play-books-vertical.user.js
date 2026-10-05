@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.13.6
+// @version      1.14.0
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -152,9 +152,8 @@
       overflow:auto;background:var(--pbv-bg,#fff);overscroll-behavior:contain;overflow-anchor:none; }
     #pbv-view[hidden] { display:none!important; }
     #pbv-view.pbv-padded { box-sizing:border-box;padding-bottom:var(--pbv-sheet,0px); }
-    #pbv-pages { padding:0 28px;margin:auto;width:min(900px,100%);box-sizing:border-box;
+    #pbv-pages { padding:0 var(--pbv-pad,28px);margin:auto;width:min(900px,100%);box-sizing:border-box;
       display:flex;flex-direction:column;align-items:center;gap:0; }
-    @media (max-width:600px) { #pbv-pages { padding:0 3px; } }
     #pbv-pages > .pbv-sheet { flex:none;position:relative;display:block;
       overflow:hidden;background:transparent; }
     #pbv-pages > .pbv-horizontal { width:min(900px,100%)!important;height:auto!important;
@@ -287,12 +286,15 @@
   const speak = mk('button', 'pbv-speak', '▶ 読み上げ'), rateInput = mk('input');
   const engineSel = mk('select'), voiceSel = mk('select');
   Object.assign(rateInput, { type: 'range', min: '0.5', max: '2.5', step: '0.1' });
+  const padInput = mk('input');
+  Object.assign(padInput, { type: 'range', min: '0', max: '80', step: '1' });
+  const padField = field('', padInput);
   const rateField = field('', rateInput), engineField = field('読み上げエンジン', engineSel);
   const voiceField = field('声', voiceSel);
   const panel = mk('div', 'pbv-panel');
   const modeRow = row(list, toggle, back);
   modeRow.style.cssText = 'display:grid;grid-template-columns:1fr 1.9fr 1fr';
-  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField));
+  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField), padField);
   imageTools.append(status, menu, panel);
   const displayBtn = mk('button', 'pbv-display', 'Aa');
   displayBtn.setAttribute('aria-label', '表示オプション');
@@ -711,6 +713,17 @@
   if (native) post({ c: 'info' });
   fillSelects();
   uiLabels();
+  // 縦表示の左右の余白（px）。既定はスマホ幅で狭く、広い画面で広く。
+  const savedPad = store('pbv-pad');
+  let pad = savedPad === null || savedPad === '' ? (innerWidth <= 600 ? 3 : 28) : Number(savedPad);
+  const applyPad = () => {
+    document.documentElement.style.setProperty('--pbv-pad', `${pad}px`);
+    padField.label.textContent = `縦表示の左右の余白 ${pad}px`;
+    padInput.value = pad;
+    resize();
+  };
+  padInput.addEventListener('input', () => { pad = Number(padInput.value); store('pbv-pad', pad); applyPad(); });
+  applyPad();
   toggle.addEventListener('click', () => {
     if (speaking) stopSpeech();   // 表示モードが変わるので読み上げを止める
     active = !active;
