@@ -30,10 +30,11 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+        // 端末の既定ではなく Google 音声サービスを明示する（vivo 標準エンジンは日本語を中国語で読むため）。
         tts = new TextToSpeech(this, status -> {
             ttsReady = status == TextToSpeech.SUCCESS;
             if (ttsReady) pickJapanese();
-        });
+        }, "com.google.android.tts");
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String id) {
                 Voice v = tts.getVoice();
