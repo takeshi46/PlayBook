@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.12.0
+// @version      1.13.0
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -218,7 +218,11 @@
     #pbv-panel #pbv-speak.on { background:#d93025;border-color:#d93025; }
     #pbv-panel button[aria-pressed="true"], #pbv-panel button[aria-expanded="true"] {
       background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
-    reader-account-indicator { display:none!important; }
+    reader-account-indicator, reader-app-bar button[aria-label*="全画面"],
+    reader-app-bar button[aria-label="その他のオプション"], reader-app-bar button[aria-label="More options"] { display:none!important; }
+    body.pbv-quiet .cdk-overlay-container { visibility:hidden!important; }
+    #pbv-display { position:static;flex:none;width:40px;height:40px;margin:0;padding:0;border:0;border-radius:50%;
+      background:transparent;font:bold 17px sans-serif;cursor:pointer; }
     #pbv-menu.pbv-bar { position:static;flex:none;width:40px;height:40px;margin:0;border:0;border-radius:50%;
       background:transparent;box-shadow:none;opacity:1;font-size:22px; }
     .gb-segment p.pbv-tts { background:rgba(26,115,232,.22)!important; }
@@ -276,6 +280,8 @@
   const panel = mk('div', 'pbv-panel');
   panel.append(row(speak), row(toggle, back, list), rateField, row(engineField, voiceField));
   imageTools.append(status, menu, panel);
+  const displayBtn = mk('button', 'pbv-display', 'Aa');
+  displayBtn.setAttribute('aria-label', '表示オプション');
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
@@ -775,19 +781,38 @@
   }
   window.addEventListener('resize', resize);
   // ponytail: 配色変更はページ更新を伴わないことがあるため、1秒ごとに設定を読み直す。
-  // 右上のアカウントアイコン（CSSで非表示）の位置にメニューボタンを置く。
-  // バーが無いとき（全画面表示など）は、右下に浮かせる。
+  // 右上のアカウントアイコン（CSSで非表示）の位置に、表示オプションとメニューのボタンを置く。
+  // バーが無いとき（全画面表示など）は、メニューだけ右下に浮かせる。
   function placeMenu() {
     const slot = document.querySelector('reader-app-bar .nav-group.end');
     if (slot) {
-      if (menu.parentElement !== slot) { slot.append(menu); menu.classList.add('pbv-bar'); }
-      const ref = slot.querySelector('button:not(#pbv-menu)');
-      if (ref) menu.style.color = getComputedStyle(ref).color;
-    } else if (menu.parentElement !== imageTools) {
-      menu.classList.remove('pbv-bar'); menu.style.color = '';
-      imageTools.insertBefore(menu, panel);
+      if (menu.parentElement !== slot || displayBtn.parentElement !== slot) {
+        slot.append(displayBtn, menu); menu.classList.add('pbv-bar');
+      }
+      const ref = slot.querySelector('button:not(#pbv-menu):not(#pbv-display)');
+      if (ref) menu.style.color = displayBtn.style.color = getComputedStyle(ref).color;
+    } else {
+      displayBtn.remove();
+      if (menu.parentElement !== imageTools) {
+        menu.classList.remove('pbv-bar'); menu.style.color = '';
+        imageTools.insertBefore(menu, panel);
+      }
     }
   }
+  // 非表示にした「⋮」を裏で押して、中の「表示オプション」を開く（メニューは見せない）。
+  displayBtn.addEventListener('click', async () => {
+    const more = document.querySelector('reader-app-bar button[aria-label="その他のオプション"], reader-app-bar button[aria-label="More options"]');
+    if (!more) { status.textContent = '表示オプションを開けません'; return; }
+    document.body.classList.add('pbv-quiet');
+    more.click();
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      const item = [...document.querySelectorAll('.cdk-overlay-container button')]
+        .find(b => /表示オプション|Display options/i.test(b.textContent));
+      if (item) { item.click(); break; }
+    }
+    setTimeout(() => document.body.classList.remove('pbv-quiet'), 500);
+  });
   placeMenu();
   setInterval(() => { syncTheme(); placeMenu(); }, 1000);
   }
