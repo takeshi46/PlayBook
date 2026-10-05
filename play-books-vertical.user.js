@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.13.1
+// @version      1.13.2
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -168,7 +168,7 @@
       width:auto!important;height:auto!important;min-width:0!important;min-height:0!important;
       max-width:none!important;max-height:none!important;overflow:visible!important;
       columns:auto!important;float:none!important;clip:auto!important;clip-path:none!important;
-      text-align:start!important;white-space:normal!important;line-height:1.9!important; }
+      text-align:start!important;white-space:normal!important;line-height:var(--pbv-lh,1.9)!important; }
     #pbv-pages .pbv-horizontal div { margin:0!important;padding:0!important; }
     #pbv-pages .pbv-horizontal p { margin:0 0 0.7em!important;padding:0!important;
       text-indent:0!important;overflow-wrap:anywhere; }
@@ -417,12 +417,17 @@
     const lum = ([x, y, z]) => (0.2126 * x + 0.7152 * y + 0.0722 * z) / 255;
     const ui = lum(rgb(bg)) > 0.5 ? '#222' : '#eee';
     const fg = Math.abs(lum(rgb(bg)) - lum([r, g, b])) >= 0.4 ? style.color : ui;
+    // 行の高さ: リーダーの設定100%が文字の約2.625倍。その割合を、縦表示の標準1.9倍に掛け合わせる。
+    // ponytail: 2.625 は実測値（本によって違う場合は表示オプションの％と少しずれる）。
+    const ratio = parseFloat(style.lineHeight) / size;
+    const lh = ratio > 0 && isFinite(ratio) ? Math.min(3.5, Math.max(1.2, 1.9 * ratio / 2.625)).toFixed(3) : '';
     for (const el of [view, imageTools, gallery]) {
       el.style.setProperty('--pbv-bg', bg);
       el.style.setProperty('--pbv-ui', ui);
       el.style.setProperty('--pbv-fg', fg);
       el.style.setProperty('--pbv-font', style.fontFamily);
       if (size >= 10 && size <= 60) el.style.setProperty('--pbv-size', `${size}px`);
+      if (lh) el.style.setProperty('--pbv-lh', lh);
     }
   }
   function append() {
