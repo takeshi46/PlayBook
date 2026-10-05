@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.13.5
+// @version      1.13.6
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -216,7 +216,12 @@
     #pbv-panel input[type=range] { width:100%;min-height:28px;margin:0; }
     #pbv-panel #pbv-speak { min-height:50px;font-size:17px;font-weight:bold;background:#1a73e8;border-color:#1a73e8;color:#fff; }
     #pbv-panel #pbv-speak.on { background:#d93025;border-color:#d93025; }
-    #pbv-panel button[aria-pressed="true"], #pbv-panel button[aria-expanded="true"] {
+    #pbv-panel .pbv-seg { display:flex;padding:3px; }
+    #pbv-panel .pbv-seg span { flex:1;display:flex;align-items:center;justify-content:center;border-radius:9px;
+      font-size:13px;white-space:nowrap;opacity:.7; }
+    #pbv-panel .pbv-seg span.on { background:#1a73e8;color:#fff;font-weight:bold;opacity:1; }
+    #pbv-panel .pbv-row > button:not(#pbv-speak) { padding:0 4px;font-size:13px; }
+    #pbv-panel button[aria-expanded="true"] {
       background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
     reader-account-indicator, reader-app-bar button[aria-label*="全画面"],
     reader-app-bar button[aria-label="その他のオプション"], reader-app-bar button[aria-label="More options"] { display:none!important; }
@@ -241,8 +246,15 @@
   document.head.append(style);
   const toggle = document.createElement('button');
   toggle.id = 'pbv-toggle';
-  toggle.textContent = '縦表示';
-  toggle.setAttribute('aria-pressed', 'false');
+  toggle.className = 'pbv-seg';
+  const segNormal = document.createElement('span'), segVertical = document.createElement('span');
+  segNormal.textContent = '通常表示'; segVertical.textContent = '縦表示';
+  toggle.append(segNormal, segVertical);
+  const showMode = on => {
+    segNormal.classList.toggle('on', !on); segVertical.classList.toggle('on', on);
+    toggle.setAttribute('aria-pressed', String(on));
+  };
+  showMode(false);
   const view = document.createElement('section');
   view.id = 'pbv-view';
   view.hidden = true;
@@ -278,7 +290,9 @@
   const rateField = field('', rateInput), engineField = field('読み上げエンジン', engineSel);
   const voiceField = field('声', voiceSel);
   const panel = mk('div', 'pbv-panel');
-  panel.append(row(list, toggle, back), row(speak), rateField, row(engineField, voiceField));
+  const modeRow = row(list, toggle, back);
+  modeRow.style.cssText = 'display:grid;grid-template-columns:1fr 1.9fr 1fr';
+  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField));
   imageTools.append(status, menu, panel);
   const displayBtn = mk('button', 'pbv-display', 'Aa');
   displayBtn.setAttribute('aria-label', '表示オプション');
@@ -292,7 +306,7 @@
   // 取得済みの挿絵位置をサムネ付きで一覧にする。押すとその挿絵へ直接移動する。
   function renderList() {
     const n = index.images.length;
-    list.textContent = `${n ? `挿絵（${n}）` : '挿絵（取得中）'} ${gallery.hidden ? '▾' : '▴'}`;
+    list.textContent = `挿絵${n ? ' ' + n : '…'} ${gallery.hidden ? '▾' : '▴'}`;
     list.setAttribute('aria-expanded', String(!gallery.hidden));
     if (!gallery.hidden) fillGallery();
   }
@@ -701,12 +715,11 @@
     if (speaking) stopSpeech();   // 表示モードが変わるので読み上げを止める
     active = !active;
     view.hidden = !active;
-    toggle.textContent = active ? '通常表示' : '縦表示';
+    showMode(active);
     imageTools.classList.remove('pbv-open');
     view.classList.remove('pbv-padded');
     menu.textContent = '☰'; gallery.hidden = true;   // パネルを閉じた状態に戻す
     document.documentElement.style.setProperty('--pbv-sheet', '0px');
-    toggle.setAttribute('aria-pressed', String(active));
     clearTimeout(timeout);
     busy = false;
     pendingJump = null;
