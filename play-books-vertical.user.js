@@ -4,8 +4,8 @@
 // @homepageURL  https://github.com/takeshi46/Userscripts
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/Userscripts/main/play-books-vertical.user.js
-// @version      1.8.8
-// @description  横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
+// @version      1.9.0
+// @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
 // @run-at       document-start
@@ -212,6 +212,7 @@
     #pbv-gallery button { display:flex;flex-direction:column;gap:4px;padding:4px;border:1px solid #8886;
       border-radius:6px;background:transparent;color:var(--pbv-ui,#222);cursor:pointer;font:12px sans-serif; }
     #pbv-gallery img { width:100%;aspect-ratio:3/4;object-fit:cover;background:#8884; }
+    #pbv-pages .pbv-horizontal p.pbv-tts { background:rgba(26,115,232,.22)!important; }
     #pbv-pages .pbv-horizontal svg { display:block;width:100%!important;
       height:auto!important;max-width:100%; }
   `;
@@ -243,7 +244,10 @@
   back.textContent = '元の位置';
   back.disabled = true;
   status.setAttribute('role', 'status');
-  imageTools.append(menu, list, back, status, toggle);
+  const speak = document.createElement('button'), rateBtn = document.createElement('button');
+  const voiceBtn = document.createElement('button');
+  speak.textContent = '▶ 読み上げ';
+  imageTools.append(menu, list, back, speak, rateBtn, voiceBtn, status, toggle);
   document.body.append(imageTools, gallery);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
   let ended = {};
@@ -509,7 +513,79 @@
     list.disabled = true;
     step();
   }
+  // 読み上げ（端末標準TTS）。縦表示の段落を上から文単位で読み、読んでいる段落を強調して追従する。
+  // ponytail: 強調は段落単位。文単位の強調は Range＋CSS.highlights が必要。画面オフ継続はブラウザ依存で未保証。
+  const RATES = [0.8, 1, 1.25, 1.5, 2];
+  const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch {} return v; };
+  let rate = Number(store('pbv-rate')) || 1, voiceName = store('pbv-voice') || '';
+  let speaking = false, token = 0, current = null;
+  const voices = () => speechSynthesis.getVoices().filter(v => /^ja/i.test(v.lang));
+  const voice = () => voices().find(v => v.name === voiceName) || voices()[0];
+  function uiLabels() {
+    rateBtn.textContent = `速度 ${rate}x`;
+    voiceBtn.textContent = voice() ? `声: ${voice().name.replace(/^(Microsoft|Google)\s*/, '').slice(0, 14)}` : '声: 既定';
+    speak.textContent = speaking ? '■ 停止' : '▶ 読み上げ';
+  }
+  function paragraphs() {
+    return [...pages.querySelectorAll('.pbv-horizontal p')].filter(p => p.textContent.trim());
+  }
+  // ルビ（rt/rp）は除き、漢字側を読む。
+  function plain(p) {
+    const copy = p.cloneNode(true);
+    copy.querySelectorAll('rt, rp').forEach(el => el.remove());
+    return copy.textContent.replace(/\s+/g, ' ').trim();
+  }
+  function stopSpeech() {
+    speaking = false; token++; current?.classList.remove('pbv-tts'); current = null;
+    speechSynthesis.cancel(); uiLabels();
+  }
+  function nextParagraph(me) {
+    if (me !== token) return;
+    const list = paragraphs(), i = current ? list.indexOf(current) : -1;
+    let next = list[i + 1];
+    if (i < 0 && !current) {
+      // 開始位置: 表示領域の上端以降で最初の段落
+      const top = view.getBoundingClientRect().top;
+      next = list.find(p => p.getBoundingClientRect().bottom > top + 40);
+    }
+    if (!next) {
+      // 末尾に達した。次ページを読み込み、追加されるまで待つ。
+      if (ended[1]) { stopSpeech(); status.textContent = '最後まで読み上げました'; return; }
+      load(1); setTimeout(() => nextParagraph(me), 600); return;
+    }
+    current?.classList.remove('pbv-tts');
+    current = next; next.classList.add('pbv-tts');
+    next.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (list.length - list.indexOf(next) < 4) load(1);   // 先読み
+    const sentences = plain(next).match(/[^。！？!?]+[。！？!?]*[」』）)]*/g) || [];
+    (function say(k) {
+      if (me !== token) return;
+      if (k >= sentences.length) return nextParagraph(me);
+      const u = new SpeechSynthesisUtterance(sentences[k]);
+      u.lang = 'ja-JP'; u.rate = rate; if (voice()) u.voice = voice();
+      u.onend = () => say(k + 1);
+      u.onerror = e => { if (!/canceled|interrupted/.test(e.error)) say(k + 1); };
+      speechSynthesis.speak(u);
+    })(0);
+  }
+  speak.addEventListener('click', () => {
+    if (!('speechSynthesis' in window)) { status.textContent = 'この環境は読み上げ非対応です'; return; }
+    if (speaking) { stopSpeech(); return; }
+    if (!active) toggle.click();
+    speaking = true; token++; current = null; uiLabels();
+    setTimeout(() => nextParagraph(token), 400);
+  });
+  rateBtn.addEventListener('click', () => {
+    rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length]; store('pbv-rate', rate); uiLabels();
+  });
+  voiceBtn.addEventListener('click', () => {
+    const v = voices(); if (!v.length) return;
+    voiceName = v[(v.findIndex(x => x.name === voice()?.name) + 1) % v.length].name; store('pbv-voice', voiceName); uiLabels();
+  });
+  speechSynthesis.addEventListener?.('voiceschanged', uiLabels);
+  uiLabels();
   toggle.addEventListener('click', () => {
+    if (speaking && active) stopSpeech();   // 通常表示へ戻る前に読み上げを止める
     active = !active;
     view.hidden = !active;
     toggle.textContent = active ? '通常表示' : '上下スクロール';
