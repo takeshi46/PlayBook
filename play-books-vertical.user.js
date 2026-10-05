@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.11.1
+// @version      1.11.2
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -690,6 +690,8 @@
     toggle.textContent = active ? '通常表示' : '上下スクロール';
     imageTools.classList.remove('pbv-open');
     view.classList.remove('pbv-padded');
+    menu.textContent = '☰'; gallery.hidden = true;   // パネルを閉じた状態に戻す
+    document.documentElement.style.setProperty('--pbv-sheet', '0px');
     toggle.setAttribute('aria-pressed', String(active));
     clearTimeout(timeout);
     busy = false;
