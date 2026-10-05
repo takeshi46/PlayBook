@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -23,7 +24,7 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private WebView web;
     private TextToSpeech tts;
-    private boolean ttsReady;
+    private boolean ttsReady, jaVoice;
     private JavaScriptReplyProxy reply;
 
     @Override protected void onCreate(Bundle state) {
@@ -31,10 +32,13 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         tts = new TextToSpeech(this, status -> {
             ttsReady = status == TextToSpeech.SUCCESS;
-            if (ttsReady) tts.setLanguage(Locale.JAPAN);
+            if (ttsReady) pickJapanese();
         });
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String id) {}
+            @Override public void onStart(String id) {
+                Voice v = tts.getVoice();
+                send(id, "voice", v == null ? "?" : v.getName() + " " + v.getLocale());
+            }
             @Override public void onDone(String id) { send(id, "end", ""); }
             @Override public void onError(String id) { send(id, "error", "synthesis-failed"); }
             @Override public void onError(String id, int code) { send(id, "error", "tts-error-" + code); }
@@ -52,6 +56,21 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient());
         inject();
         web.loadUrl("https://play.google.com/books");
+    }
+
+    // 中国語などで読まれないよう、日本語の声を明示的に選ぶ（オフラインで使える声を優先）。
+    private void pickJapanese() {
+        tts.setLanguage(Locale.JAPAN);
+        Voice best = null;
+        try {
+            for (Voice v : tts.getVoices()) {
+                if (!v.getLocale().getLanguage().equals("ja")
+                        || v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)) continue;
+                if (best == null || (best.isNetworkConnectionRequired() && !v.isNetworkConnectionRequired())) best = v;
+            }
+        } catch (Exception e) { /* 声一覧が取れない場合は言語指定のみで読む */ }
+        jaVoice = best != null;
+        if (best != null) tts.setVoice(best);
     }
 
     private void inject() {
@@ -73,6 +92,8 @@ public class MainActivity extends Activity {
             if ("stop".equals(m.getString("c"))) {
                 tts.stop();
                 stopService(new Intent(this, KeepAliveService.class));
+            } else if (ttsReady && !jaVoice) {
+                send(String.valueOf(m.getInt("id")), "error", "日本語の声がありません");
             } else if (ttsReady) {
                 startForegroundService(new Intent(this, KeepAliveService.class));
                 tts.setSpeechRate((float) m.optDouble("r", 1));

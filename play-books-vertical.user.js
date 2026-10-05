@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.10.0
+// @version      1.10.1
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -524,7 +524,9 @@
   const native = window.PBNative, waiting = {};
   let uid = 0;
   if (native) native.onmessage = e => {
-    const m = JSON.parse(e.data), w = waiting[m.id];
+    const m = JSON.parse(e.data);
+    if (m.e === 'voice') { status.textContent = `声: ${m.m}`; return; }
+    const w = waiting[m.id];
     delete waiting[m.id];
     if (m.e === 'end') w?.done(); else if (m.e === 'error') w?.fail(m.m);
   };
