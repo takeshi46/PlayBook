@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.13.4
+// @version      1.13.5
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -701,7 +701,7 @@
     if (speaking) stopSpeech();   // 表示モードが変わるので読み上げを止める
     active = !active;
     view.hidden = !active;
-    toggle.textContent = active ? '横表示' : '縦表示';
+    toggle.textContent = active ? '通常表示' : '縦表示';
     imageTools.classList.remove('pbv-open');
     view.classList.remove('pbv-padded');
     menu.textContent = '☰'; gallery.hidden = true;   // パネルを閉じた状態に戻す
@@ -756,7 +756,7 @@
     const source = [...document.querySelectorAll('reader-pages reader-page')].find(p => p.id === link.dataset.pbvPage);
     const original = source?.querySelectorAll('a')[Number(link.dataset.pbvIndex)];
     if (original) original.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    else status.textContent = 'このリンクは横表示で開いてください';
+    else status.textContent = 'このリンクは通常表示で開いてください';
   }, true);
   back.addEventListener('click', () => {
     if (context) window.parent.postMessage({ type: 'pbv-return' }, 'https://play.google.com');
