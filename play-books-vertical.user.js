@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.15.0
+// @version      1.15.2
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -20,8 +20,12 @@
   // 本一覧: 各カードの表紙に読書進行度（％）を重ねる。ページ自身の通信を読むだけで、保存・変更はしない。
   if (location.hostname === 'play.google.com' && /^\/books\/?$/.test(location.pathname)) { libraryProgress(); return; }
   function libraryProgress() {
-    const progress = new Map();   // 本のID → 進行度(%)。メモリ上だけに持つ。
-    let timer;
+    const progress = new Map();   // 本のID → 進行度(%)
+    // 戻った直後に消えないよう、「本のID → [％, 総ページ数]」だけを端末（localStorage）に保存する。書名などは保存しない。
+    const KEY = 'pbv-lib-progress', saved = {};
+    try { Object.assign(saved, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* 保存データが壊れていたら無視 */ }
+    for (const [id, v] of Object.entries(saved)) if (Array.isArray(v)) progress.set(id, v[0]);
+    let frame = 0;
     // 最後に読んだ位置（GBS.PT43.… の 43）。リーダー下部の「43 / 253」のページ数と一致する。
     const findPos = n => {
       if (typeof n === 'string') { const m = n.match(/^GBS\.P[TA](\d+)/); return m ? Number(m[1]) : 0; }
@@ -38,12 +42,16 @@
         const [id, meta] = node;
         if (typeof id === 'string' && /^[\w-]{12}$/.test(id) && Array.isArray(meta) && typeof meta[5] === 'number' && meta[5] > 0) {
           const pos = findPos(node.slice(2));
-          if (pos) progress.set(id, Math.min(100, Math.round(pos / meta[5] * 100)));
+          if (pos) {
+            const pct = Math.min(100, Math.round(pos / meta[5] * 100));
+            progress.set(id, pct); saved[id] = [pct, meta[5]];
+          }
           return;
         }
         node.forEach(visit);
       };
       visit(data);
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { /* 保存できなくても表示はできる */ }
       schedule();
     };
     const isLibrary = url => /LibraryService\/SyncUserLibrary/.test(url || '');
@@ -72,7 +80,8 @@
       .pbv-pct i { display:block;height:100%;background:#1a73e8; }
       .pbv-pct b { position:absolute;right:3px;bottom:7px;padding:2px 6px;border-radius:9px;
         background:rgba(0,0,0,.7);color:#fff;font:bold 11px/1.2 sans-serif; }`;
-    function schedule() { clearTimeout(timer); timer = setTimeout(apply, 250); }
+    // カードが描画された同じ1コマで反映する（遅らせると、％が後から出てくるのが見える）。
+    function schedule() { if (!frame) frame = requestAnimationFrame(() => { frame = 0; apply(); }); }
     function apply() {
       if (!style.isConnected) (document.head || document.documentElement)?.append(style);
       for (const card of document.querySelectorAll('gpb-volume-card')) {
@@ -93,9 +102,22 @@
       }
     }
     new MutationObserver(schedule).observe(document, { childList: true, subtree: true });
+    schedule();
   }
   // 親ページだけが読書URLを操作する。iframeから渡されたURLは使用しない。
   if (location.hostname === 'play.google.com') {
+    // 本一覧の％を最新にする。URLの pg=GBS.PT43… が今の位置。総ページ数は本一覧が保存した値を使う。
+    const saveProgress = () => {
+      try {
+        const q = new URL(location.href).searchParams, id = q.get('id'), m = (q.get('pg') || '').match(/^GBS\.P[TA](\d+)/);
+        const all = JSON.parse(localStorage.getItem('pbv-lib-progress') || '{}');
+        if (!id || !m || !Array.isArray(all[id]) || !(all[id][1] > 0)) return;
+        all[id][0] = Math.min(100, Math.round(Number(m[1]) / all[id][1] * 100));
+        localStorage.setItem('pbv-lib-progress', JSON.stringify(all));
+      } catch { /* 失敗しても読書には影響しない */ }
+    };
+    window.addEventListener('pagehide', saveProgress);
+    setInterval(saveProgress, 5000);
     window.addEventListener('message', event => {
       const frame = document.querySelector('iframe.-gb-display');
       if (event.origin !== 'https://books.googleusercontent.com' || event.source !== frame?.contentWindow) return;
@@ -357,6 +379,7 @@
   gallery.id = 'pbv-gallery';
   gallery.hidden = true;
   menu.id = 'pbv-menu';
+  menu.hidden = true;   // バーに置けるまで隠す（右下に一瞬出ないように）
   menu.textContent = '☰';
   menu.setAttribute('aria-label', '操作メニュー');
   back.textContent = '元の位置';
@@ -920,14 +943,18 @@
       }
       const ref = slot.querySelector('button:not(#pbv-menu):not(#pbv-display)');
       if (ref) menu.style.color = displayBtn.style.color = getComputedStyle(ref).color;
+      menu.hidden = false;
     } else {
       displayBtn.remove();
       if (menu.parentElement !== imageTools) {
         menu.classList.remove('pbv-bar'); menu.style.color = '';
         imageTools.insertBefore(menu, panel);
       }
+      // 起動直後はバーがまだ描画されていない。4秒待ってもバーが無い（全画面など）ときだけ右下に出す。
+      menu.hidden = Date.now() - startedAt < 4000;
     }
   }
+  const startedAt = Date.now();
   // 非表示にした「⋮」を裏で押して、中の「表示オプション」を開く。開いている間にもう一度押すと閉じる。
   const displayPane = () => [...document.querySelectorAll('.cdk-overlay-pane.-gb-titled-dialog')]
     .find(p => /表示オプション|Display options/i.test(p.textContent));
@@ -956,6 +983,11 @@
     document.body.classList.remove('pbv-quiet');
   });
   placeMenu();
+  // バーが描画された瞬間に置く（1秒待たない）。
+  let placeFrame = 0;
+  new MutationObserver(() => {
+    if (!placeFrame) placeFrame = requestAnimationFrame(() => { placeFrame = 0; placeMenu(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
   setInterval(() => { syncTheme(); placeMenu(); }, 1000);
   }
 })();
