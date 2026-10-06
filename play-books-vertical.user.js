@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.18.0
+// @version      1.19.0
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -140,6 +140,27 @@
         }
       }
     };
+    // リーダーが画像（挿絵・口絵）を取りに行くURLと大きさを記録して、リーダー本体のフレームへ渡す。
+    // 一時URL(blob:)の画像を、元のURLと結びつけるため。取得するデータは暗号化(enc_all)されているので、
+    // 記録するURLからは暗号化・大きさ・取得元の指定を外す（外すと普通の小さなJPEGが取れる。実測: 幅200で約12KB）。
+    const imageFetches = [];
+    const nativeFetch = window.fetch;
+    window.fetch = function(...args) {
+      const result = nativeFetch.apply(this, args);
+      try {
+        const url = new URL(typeof args[0] === 'string' ? args[0] : args[0]?.url, location.href);
+        if (url.pathname === '/books/publisher/content/reader' && url.searchParams.get('img') === '1' && url.searchParams.get('sig')) {
+          result.then(r => r.clone().arrayBuffer()).then(buf => {
+            for (const k of ['enc_all', 'h', 'w', 'source']) url.searchParams.delete(k);
+            const rec = { url: url.href, size: buf.byteLength };
+            imageFetches.push(rec);
+            if (imageFetches.length > 80) imageFetches.shift();
+            document.querySelector('iframe.-gb-display')?.contentWindow?.postMessage({ type: 'pbv-img', ...rec }, 'https://books.googleusercontent.com');
+          }).catch(() => {});
+        }
+      } catch { /* 記録に失敗しても、リーダーの通信は止めない */ }
+      return result;
+    };
     window.addEventListener('pagehide', saveProgress);
     setInterval(saveProgress, 5000);
     window.addEventListener('message', event => {
@@ -157,7 +178,7 @@
       if (data.type === 'pbv-context') {
         let settings = {};
         try { settings = JSON.parse(localStorage.getItem('pbv-settings') || '{}'); } catch {}
-        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing, settings, thumbs: loadThumbs(id) }, event.origin);
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing, settings, thumbs: loadThumbs(id), images: imageFetches }, event.origin);
       } else if (data.type === 'pbv-thumb') {
         // 形式と大きさを確かめてから保存する（位置は GBS. 形式、画像は JPEG の data URL で60KBまで）。
         if (typeof data.pg !== 'string' || !/^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(data.pg)) return;
@@ -196,6 +217,14 @@
   }
   const streamed = { images: [], ranges: [] };
   let manifest, refresh = () => {};
+  // 親ページが記録した、画像の取得URLと大きさ。blob: の画像と結びつけて、サムネをURLから取る（linkSource）。
+  const imageFetches = [];
+  function addImageFetch(f) {
+    if (typeof f?.url !== 'string' || !f.url.startsWith('https://play.google.com/books/publisher/content/reader?')
+      || !Number.isSafeInteger(f.size) || imageFetches.some(i => i.url === f.url)) return;
+    imageFetches.push({ url: f.url, size: f.size, used: false });
+    if (imageFetches.length > 80) imageFetches.shift();
+  }
   // 通常のリーダーが受信した章HTMLだけを読む。通信内容やアプリのコールバックは変更しない。
   const observed = new WeakSet(), add = MessagePort.prototype.addEventListener;
   function receive(event) {
@@ -474,7 +503,9 @@
   }
   // 一覧のサムネは小さく表示するだけなので、幅300pxの縮小版を取る（元画像は1枚あたり約100KB〜1MB、縮小版は約8〜33KB）。
   // 署名(sig)は w を含まないので、そのまま使える。取れないときは元の画像に戻す。
-  const thumbUrl = src => { try { const u = new URL(src); u.searchParams.set('w', '300'); return u.href; } catch { return src; } };
+  const thumbUrl = src => {
+    try { const u = new URL(src); for (const k of ['enc_all', 'h', 'source']) u.searchParams.delete(k); u.searchParams.set('w', '300'); return u.href; } catch { return src; }
+  };
   // 挿絵の件数が分かったら、一覧を開く前にサムネをバックグラウンドで読み込んでおく（開いた瞬間に出る）。
   const preloaded = new Set();
   let preloadTimer;
@@ -503,7 +534,7 @@
   function captureThumb(pg, el) {
     if (thumbs.has(pg) || !el) return;
     const href = el.tagName === 'IMG' ? (el.currentSrc || el.src) : (el.getAttribute('href') || el.getAttribute('xlink:href'));
-    if (!href) return;
+    if (!href || !href.startsWith('blob:')) return;
     thumbs.set(pg, '');
     const im = new Image();
     im.onload = () => {
@@ -523,14 +554,35 @@
     im.onerror = () => thumbs.delete(pg);
     im.src = href;
   }
+  // 一時URL(blob:)の画像を、リーダーが取得したURLと結びつける。取得したデータ(暗号化つき)は、表示用の画像より十数バイト大きい。
+  // 大きさが近い（差0〜64バイト）未使用の記録を、同じ画像とみなす（画像ごとに数KB以上違うので取り違えない）。
+  const linking = new Set();
+  async function linkSource(item, el) {
+    const href = el.tagName === 'IMG' ? (el.currentSrc || el.src) : (el.getAttribute('href') || el.getAttribute('xlink:href'));
+    if (!href || !href.startsWith('blob:') || linking.has(item.pg)) return;
+    linking.add(item.pg);
+    try {
+      const size = (await (await fetch(href)).blob()).size;
+      for (let attempt = 0; attempt < 5 && !item.src; attempt++) {
+        let best = null;
+        for (const f of imageFetches) {
+          const d = f.size - size;
+          if (!f.used && d >= 0 && d <= 64 && (!best || d < best.size - size)) best = f;
+        }
+        if (best) { best.used = true; item.src = best.url; saveIndex(); renderList(); }
+        else await new Promise(r => setTimeout(r, 200));   // 記録は、画像が出た少しあとに届くことがある
+      }
+    } catch { /* 結びつけられなくても、保存した縮小サムネで表示できる */ }
+    linking.delete(item.pg);
+  }
   const scanButton = document.createElement('button');
   scanButton.className = 'pbv-scan-start';
-  scanButton.textContent = '全ページから挿絵を探す（約15秒）';
+  scanButton.textContent = '全ページから挿絵を探す';
   scanButton.addEventListener('click', () => { gallery.hidden = true; renderList(); scanIllustrations(); });
   scanStop.addEventListener('click', () => { scanCancel = true; });
   const thumbOf = item => item.src ? thumbUrl(item.src) : thumbs.get(item.pg) || '';
   function fillGallery() {
-    const signature = index.images.map(item => item.pg + (thumbOf(item) ? '+' : '')).join();
+    const signature = index.images.map(item => item.pg + (item.src ? 'u' : '') + (thumbOf(item) ? '+' : '')).join();
     if (gallery.dataset.signature === signature) return;
     gallery.dataset.signature = signature;
     gallery.replaceChildren(scanButton, ...index.images.map((item, i) => {
@@ -539,7 +591,8 @@
       if (thumbOf(item)) {
         const img = new Image();
         img.alt = ''; img.decoding = 'async'; img.src = thumbOf(item);
-        if (item.src) img.onerror = () => { img.onerror = null; img.src = item.src; };
+        // URLが読み込めない（期限切れなど）ときは、保存した縮小サムネ、なければ元のURLへ。
+        if (item.src) img.onerror = () => { img.onerror = null; img.src = thumbs.get(item.pg) || item.src; };
         button.append(img);
       }
       button.append(`挿絵 ${i + 1}`);
@@ -571,7 +624,7 @@
       slider.dispatchEvent(new Event('input', { bubbles: true }));
       slider.dispatchEvent(new Event('change', { bubbles: true }));
       for (let i = 0; i < 80 && key() === before; i++) await wait(10);
-      await wait(10);   // 画像が付くまで少し待つ（実測: 8msでも見落としなし。全250ページで約15秒）
+      await wait(10);   // 画像が付くまで少し待つ（実測: 8msでも見落としなし。250ページの本で約15秒）
     };
     const wasVertical = active;
     scanning = true; scanCancel = false;
@@ -631,7 +684,8 @@
       if (!found) continue;
       let item = index.images.find(i => i.pg === found.pg);
       if (!item) { item = { pg: found.pg, order: found.order }; index.images.push(item); }
-      if (!item.src) captureThumb(found.pg, found.el);
+      captureThumb(found.pg, found.el);   // 予備: 縮小サムネ（端末に保存。blob: の画像だけ）
+      if (!item.src) linkSource(item, found.el);
     }
     index.images.sort((a, b) => a.order - b.order);
   }
@@ -650,8 +704,10 @@
       begin?.();
       return;
     }
+    if (event.data?.type === 'pbv-img') { addImageFetch(event.data); return; }
     if (event.data?.type !== 'pbv-context') return;
     context = event.data;
+    for (const f of Array.isArray(context.images) ? context.images : []) addImageFetch(f);
     if (manifest && manifest.metadata.volume_id !== context.id) return;
     mergeIndex(index, context.index);
     if (context.settings) applySettings(context.settings);
