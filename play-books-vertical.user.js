@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.15.2
+// @version      1.16.0
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -131,7 +131,17 @@
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === 'pbv-context') {
-        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing }, event.origin);
+        let settings = {};
+        try { settings = JSON.parse(localStorage.getItem('pbv-settings') || '{}'); } catch {}
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing, settings }, event.origin);
+      } else if (data.type === 'pbv-set') {
+        // 保存してよい設定だけを受け付ける（読み上げ速度・縦表示の余白・声）。
+        if (!['pbv-rate', 'pbv-pad2', 'pbv-voice'].includes(data.key) || typeof data.value !== 'string' || data.value.length > 80) return;
+        try {
+          const all = JSON.parse(localStorage.getItem('pbv-settings') || '{}');
+          all[data.key] = data.value;
+          localStorage.setItem('pbv-settings', JSON.stringify(all));
+        } catch {}
       } else if (data.type === 'pbv-landed') {
         try { sessionStorage.removeItem(targetKey); } catch {}
       } else if (data.type === 'pbv-index') {
@@ -419,6 +429,20 @@
     list.textContent = `挿絵${n ? ' ' + n : '…'} ${gallery.hidden ? '▾' : '▴'}`;
     list.setAttribute('aria-expanded', String(!gallery.hidden));
     if (!gallery.hidden) fillGallery();
+    clearTimeout(preloadTimer); preloadTimer = setTimeout(preloadThumbs, 1500);
+  }
+  // 一覧のサムネは小さく表示するだけなので、幅300pxの縮小版を取る（元画像は1枚あたり約100KB〜1MB、縮小版は約8〜33KB）。
+  // 署名(sig)は w を含まないので、そのまま使える。取れないときは元の画像に戻す。
+  const thumbUrl = src => { try { const u = new URL(src); u.searchParams.set('w', '300'); return u.href; } catch { return src; } };
+  // 挿絵の件数が分かったら、一覧を開く前にサムネをバックグラウンドで読み込んでおく（開いた瞬間に出る）。
+  const preloaded = new Set();
+  let preloadTimer;
+  function preloadThumbs() {
+    for (const item of index.images) {
+      if (!item.src || preloaded.has(item.src)) continue;
+      preloaded.add(item.src);
+      new Image().src = thumbUrl(item.src);
+    }
   }
   function fillGallery() {
     const signature = index.images.map(item => item.pg + (item.src ? '+' : '')).join();
@@ -429,7 +453,8 @@
       button.dataset.pg = item.pg;
       if (item.src) {
         const img = new Image();
-        img.loading = 'lazy'; img.alt = ''; img.src = item.src;
+        img.alt = ''; img.decoding = 'async'; img.src = thumbUrl(item.src);
+        img.onerror = () => { img.onerror = null; img.src = item.src; };
         button.append(img);
       }
       button.append(`挿絵 ${i + 1}`);
@@ -498,6 +523,7 @@
     context = event.data;
     if (manifest && manifest.metadata.volume_id !== context.id) return;
     mergeIndex(index, context.index);
+    if (context.settings) applySettings(context.settings);
     rememberImages();
     if (typeof context.landing === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(context.landing))
       landing = { signature: '', steps: 0 };
@@ -682,7 +708,25 @@
   }
   // 読み上げ。縦表示でも通常のページ表示でも使える。アプリ内（PBNative）なら端末TTSのエンジン・声を選べる。
   // ponytail: 強調は段落単位。文単位の強調は Range＋CSS.highlights が必要。
-  const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch {} return v; };
+  // 設定の保存先。リーダー(iframe)の localStorage はアプリを閉じると消えるので、親ページにも預ける（pbv-set）。
+  const cfg = {};
+  const store = (k, v) => {
+    if (v === undefined) { try { return cfg[k] ?? localStorage.getItem(k); } catch { return cfg[k] ?? null; } }
+    cfg[k] = String(v);
+    try { localStorage.setItem(k, v); } catch {}
+    window.parent.postMessage({ type: 'pbv-set', key: k, value: String(v) }, 'https://play.google.com');
+    return v;
+  };
+  // 親ページに保存してあった設定を反映する（読み込み直後に1回）。
+  function applySettings(saved) {
+    for (const k of ['pbv-rate', 'pbv-pad2', 'pbv-voice']) if (typeof saved[k] === 'string') cfg[k] = saved[k];
+    const r = Number(cfg['pbv-rate']);
+    if (r >= 0.5 && r <= 2.5) rate = r;
+    const q = cfg['pbv-pad2'] === undefined ? NaN : Number(cfg['pbv-pad2']);
+    if (q >= 0 && q <= 80) pad = q;
+    if (cfg['pbv-voice']) voiceName = cfg['pbv-voice'];
+    uiLabels(); applyPad(); fillSelects();
+  }
   let rate = Number(store('pbv-rate')) || 1, voiceName = store('pbv-voice') || '';
   let speaking = false, token = 0, current = null, quick = 0, uid = 0, nativeInfo = null;
   const synth = window.speechSynthesis;
