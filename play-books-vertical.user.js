@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.17.1
+// @version      1.18.0
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -116,6 +116,30 @@
         localStorage.setItem('pbv-lib-progress', JSON.stringify(all));
       } catch { /* 失敗しても読書には影響しない */ }
     };
+    // 挿絵の縮小サムネ（幅200pxのJPEG）を、アプリを閉じても残る側に保存する。1冊あたり約500KB・最大8冊。
+    const TH = 'pbv-thumbs:', TH_ORDER = 'pbv-thumbs-order';
+    const loadThumbs = id => { try { return JSON.parse(localStorage.getItem(TH + id) || '{}'); } catch { return {}; } };
+    const touchOrder = id => {
+      let order = [];
+      try { order = JSON.parse(localStorage.getItem(TH_ORDER) || '[]'); } catch {}
+      order = order.filter(x => x !== id); order.push(id);
+      while (order.length > 8) { try { localStorage.removeItem(TH + order.shift()); } catch {} }
+      try { localStorage.setItem(TH_ORDER, JSON.stringify(order)); } catch {}
+      return order;
+    };
+    const saveThumb = (id, pg, dataUrl) => {
+      const all = loadThumbs(id);
+      all[pg] = dataUrl;
+      const text = JSON.stringify(all);
+      if (text.length > 500000) return;
+      const write = () => { localStorage.setItem(TH + id, text); touchOrder(id); };
+      try { write(); } catch {
+        // 容量不足: 他の本のサムネを古い順に消して、もう一度だけ試す。
+        for (const other of touchOrder(id).filter(x => x !== id)) {
+          try { localStorage.removeItem(TH + other); write(); return; } catch { /* 次の本を消す */ }
+        }
+      }
+    };
     window.addEventListener('pagehide', saveProgress);
     setInterval(saveProgress, 5000);
     window.addEventListener('message', event => {
@@ -133,7 +157,12 @@
       if (data.type === 'pbv-context') {
         let settings = {};
         try { settings = JSON.parse(localStorage.getItem('pbv-settings') || '{}'); } catch {}
-        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing, settings }, event.origin);
+        event.source.postMessage({ type: 'pbv-context', id, pg: url.searchParams.get('pg'), mode, bookmark, index: savedIndex, landing, settings, thumbs: loadThumbs(id) }, event.origin);
+      } else if (data.type === 'pbv-thumb') {
+        // 形式と大きさを確かめてから保存する（位置は GBS. 形式、画像は JPEG の data URL で60KBまで）。
+        if (typeof data.pg !== 'string' || !/^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(data.pg)) return;
+        if (typeof data.data !== 'string' || !data.data.startsWith('data:image/jpeg;base64,') || data.data.length > 60000) return;
+        saveThumb(id, data.pg, data.data);
       } else if (data.type === 'pbv-set') {
         // 保存してよい設定だけを受け付ける（読み上げ速度・縦表示の余白・声）。
         if (!['pbv-rate', 'pbv-pad2', 'pbv-voice'].includes(data.key) || typeof data.value !== 'string' || data.value.length > 80) return;
@@ -457,8 +486,20 @@
     }
   }
   // 通常のURLを持たない画像（blob:）は、表示中の画像から縮小コピーを作る。保存はせず、この起動中のメモリだけで使う。
-  const thumbs = new Map();   // pg → サムネのURL（作成中は ''）
+  const thumbs = new Map();   // pg → サムネのURL（作成中は ''）。親ページにも保存し、次回の起動で戻す。
   let thumbTimer;
+  // 親ページに保存してあったサムネ（data URL）を、表示用のURLに戻す。
+  function restoreThumbs(saved) {
+    for (const [pg, data] of Object.entries(saved)) {
+      if (thumbs.get(pg) || typeof data !== 'string') continue;
+      try {
+        const bin = atob(data.split(',')[1] || '');
+        const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+        thumbs.set(pg, URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })));
+      } catch { /* 壊れたデータは無視 */ }
+    }
+    renderList();
+  }
   function captureThumb(pg, el) {
     if (thumbs.has(pg) || !el) return;
     const href = el.tagName === 'IMG' ? (el.currentSrc || el.src) : (el.getAttribute('href') || el.getAttribute('xlink:href'));
@@ -466,7 +507,7 @@
     thumbs.set(pg, '');
     const im = new Image();
     im.onload = () => {
-      const w = 240, h = Math.max(1, Math.round(w * (im.naturalHeight || 1) / (im.naturalWidth || 1)));
+      const w = 200, h = Math.max(1, Math.round(w * (im.naturalHeight || 1) / (im.naturalWidth || 1)));
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(im, 0, 0, w, h);
@@ -474,7 +515,10 @@
         if (!blob) { thumbs.delete(pg); return; }
         thumbs.set(pg, URL.createObjectURL(blob));
         clearTimeout(thumbTimer); thumbTimer = setTimeout(renderList, 300);
-      }, 'image/jpeg', 0.7);
+        const reader = new FileReader();
+        reader.onload = () => window.parent.postMessage({ type: 'pbv-thumb', pg, data: reader.result }, 'https://play.google.com');
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.65);
     };
     im.onerror = () => thumbs.delete(pg);
     im.src = href;
@@ -611,6 +655,7 @@
     if (manifest && manifest.metadata.volume_id !== context.id) return;
     mergeIndex(index, context.index);
     if (context.settings) applySettings(context.settings);
+    if (context.thumbs) restoreThumbs(context.thumbs);
     rememberImages();
     if (typeof context.landing === 'string' && /^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(context.landing))
       landing = { signature: '', steps: 0 };
