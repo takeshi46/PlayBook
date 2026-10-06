@@ -1,19 +1,99 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         Google Play Books 上下スクロール
 // @namespace    local.playbooks.vertical
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.14.3
-// @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
+// @version      1.15.0
+// @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
+// @match        https://play.google.com/books
+// @match        https://play.google.com/books?*
+// @match        https://play.google.com/books/
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
 (() => {
   'use strict';
+  // 本一覧: 各カードの表紙に読書進行度（％）を重ねる。ページ自身の通信を読むだけで、保存・変更はしない。
+  if (location.hostname === 'play.google.com' && /^\/books\/?$/.test(location.pathname)) { libraryProgress(); return; }
+  function libraryProgress() {
+    const progress = new Map();   // 本のID → 進行度(%)。メモリ上だけに持つ。
+    let timer;
+    // 最後に読んだ位置（GBS.PT43.… の 43）。リーダー下部の「43 / 253」のページ数と一致する。
+    const findPos = n => {
+      if (typeof n === 'string') { const m = n.match(/^GBS\.P[TA](\d+)/); return m ? Number(m[1]) : 0; }
+      if (Array.isArray(n)) for (const c of n) { const v = findPos(c); if (v) return v; }
+      return 0;
+    };
+    // ponytail: 応答は位置で意味が決まる配列。本1冊 = [本ID, 詳細(5番目が総ページ数), ユーザー情報(最後の位置を含む), …]。
+    // 仕様変更で並びが変わると表示されなくなる（壊れても本一覧の動作には影響しない）。
+    const collect = text => {
+      let data;
+      try { data = JSON.parse(text); } catch { return; }
+      const visit = node => {
+        if (!Array.isArray(node)) return;
+        const [id, meta] = node;
+        if (typeof id === 'string' && /^[\w-]{12}$/.test(id) && Array.isArray(meta) && typeof meta[5] === 'number' && meta[5] > 0) {
+          const pos = findPos(node.slice(2));
+          if (pos) progress.set(id, Math.min(100, Math.round(pos / meta[5] * 100)));
+          return;
+        }
+        node.forEach(visit);
+      };
+      visit(data);
+      schedule();
+    };
+    const isLibrary = url => /LibraryService\/SyncUserLibrary/.test(url || '');
+    const nativeFetch = window.fetch;
+    window.fetch = function(...args) {
+      const result = nativeFetch.apply(this, args);
+      try {
+        const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
+        if (isLibrary(url)) result.then(r => r.clone().text()).then(collect).catch(() => {});
+      } catch { /* 読み取りに失敗しても通信は止めない */ }
+      return result;
+    };
+    const nativeOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      if (isLibrary(String(url))) {
+        this.addEventListener('load', () => {
+          try { collect(this.responseType === 'json' ? JSON.stringify(this.response) : this.responseText); } catch { /* 無視 */ }
+        });
+      }
+      return nativeOpen.call(this, method, url, ...rest);
+    };
+    const style = document.createElement('style');
+    style.textContent = `
+      .pbv-pct { position:absolute;left:0;right:0;bottom:0;pointer-events:none; }
+      .pbv-pct u { display:block;height:4px;background:rgba(0,0,0,.4); }
+      .pbv-pct i { display:block;height:100%;background:#1a73e8; }
+      .pbv-pct b { position:absolute;right:3px;bottom:7px;padding:2px 6px;border-radius:9px;
+        background:rgba(0,0,0,.7);color:#fff;font:bold 11px/1.2 sans-serif; }`;
+    function schedule() { clearTimeout(timer); timer = setTimeout(apply, 250); }
+    function apply() {
+      if (!style.isConnected) (document.head || document.documentElement)?.append(style);
+      for (const card of document.querySelectorAll('gpb-volume-card')) {
+        const cover = card.querySelector('.cover-image-container');
+        const href = card.querySelector('a[href*="reader?id="]')?.href;
+        if (!cover || !href) continue;
+        const pct = progress.get(new URL(href).searchParams.get('id'));
+        let el = cover.querySelector(':scope > .pbv-pct');
+        if (!pct) { el?.remove(); continue; }
+        if (!el) {
+          el = document.createElement('div'); el.className = 'pbv-pct'; el.innerHTML = '<u><i></i></u><b></b>';
+          cover.append(el);
+        }
+        const label = `${pct}%`, bar = el.querySelector('i'), text = el.querySelector('b');
+        // 同じ値の再代入でもDOMが変わり、監視が連鎖するので、違うときだけ書く。
+        if (text.textContent !== label) text.textContent = label;
+        if (bar.style.width !== label) bar.style.width = label;
+      }
+    }
+    new MutationObserver(schedule).observe(document, { childList: true, subtree: true });
+  }
   // 親ページだけが読書URLを操作する。iframeから渡されたURLは使用しない。
   if (location.hostname === 'play.google.com') {
     window.addEventListener('message', event => {
