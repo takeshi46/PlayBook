@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.20.1
+// @version      1.20.2
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -392,8 +392,12 @@
       font:14px sans-serif;cursor:pointer;text-overflow:ellipsis; }
     #pbv-panel button:disabled { opacity:.45;cursor:default; }
     #pbv-panel details > summary { display:flex;align-items:center;min-height:42px;padding:0 12px;border:1px solid #8886;
-      border-radius:12px;font:14px sans-serif;cursor:pointer; }
+      border-radius:12px;font:14px sans-serif;cursor:pointer;justify-content:space-between;list-style:none; }
+    #pbv-panel details > summary::-webkit-details-marker { display:none; }
+    #pbv-panel details > summary::after { content:'';width:8px;height:8px;margin:-4px 2px 0 0;border:solid currentColor;
+      border-width:0 2px 2px 0;transform:rotate(45deg);transition:transform .15s; }
     #pbv-panel details[open] > summary { border-color:#1e8e3e;color:#1e8e3e; }
+    #pbv-panel details[open] > summary::after { transform:rotate(225deg);margin-top:4px; }
     #pbv-panel details > :not(summary) { margin-top:10px; }
     #pbv-panel input[type=range] { width:100%;min-height:28px;margin:0; }
     #pbv-panel #pbv-speak { min-height:50px;font-size:17px;font-weight:bold;background:#1e8e3e;border-color:#1e8e3e;color:#fff; }
