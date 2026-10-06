@@ -10,22 +10,22 @@ import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 import android.os.PowerManager;
 
-// ?????????????????????????????? CPU ??????
+// 読み上げ中だけ前面サービスとして動き、画面オフでもプロセスと CPU を維持する。
 public class KeepAliveService extends Service {
     private PowerManager.WakeLock lock;
 
     @Override public int onStartCommand(Intent intent, int flags, int id) {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel("tts", "????", NotificationManager.IMPORTANCE_LOW));
+        nm.createNotificationChannel(new NotificationChannel("tts", "読み上げ", NotificationManager.IMPORTANCE_LOW));
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new Notification.Builder(this, "tts")
-                .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("PlayBook ?????").setContentIntent(open).setOngoing(true).build();
+                .setSmallIcon(R.drawable.ic_stat_tts)
+                .setContentTitle("PlayBook 読み上げ中").setContentIntent(open).setOngoing(true).build();
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
         if (lock == null) {
             lock = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "playbook:tts");
-            lock.acquire(6 * 60 * 60 * 1000L);   // ponytail: ??6???????????????
+            lock.acquire(6 * 60 * 60 * 1000L);   // ponytail: 最大6時間で自動解放。必要なら延長。
         }
         return START_NOT_STICKY;
     }
