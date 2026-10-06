@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.19.0
+// @version      1.20.0
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -184,9 +184,13 @@
         if (typeof data.pg !== 'string' || !/^GBS\.[A-Za-z0-9_.+-]{1,180}$/.test(data.pg)) return;
         if (typeof data.data !== 'string' || !data.data.startsWith('data:image/jpeg;base64,') || data.data.length > 60000) return;
         saveThumb(id, data.pg, data.data);
+      } else if (data.type === 'pbv-thumb-clear') {
+        // 保存済みの縮小サムネ（すべての本）を削除する。挿絵の位置とURLは残す。
+        try { for (const k of Object.keys(localStorage)) if (k.startsWith('pbv-thumbs')) localStorage.removeItem(k); } catch {}
       } else if (data.type === 'pbv-set') {
         // 保存してよい設定だけを受け付ける（読み上げ速度・縦表示の余白・声）。
-        if (!['pbv-rate', 'pbv-pad2', 'pbv-voice'].includes(data.key) || typeof data.value !== 'string' || data.value.length > 80) return;
+        if (!['pbv-rate', 'pbv-pad2', 'pbv-voice', 'pbv-thumbsave'].includes(data.key) || typeof data.value !== 'string' || data.value.length > 80) return;
+        if (data.key === 'pbv-thumbsave' && !['all', 'unlinked', 'none'].includes(data.value)) return;
         try {
           const all = JSON.parse(localStorage.getItem('pbv-settings') || '{}');
           all[data.key] = data.value;
@@ -476,12 +480,18 @@
   const padInput = mk('input');
   Object.assign(padInput, { type: 'range', min: '0', max: '80', step: '1' });
   const padField = field('', padInput);
+  // サムネイルの保存: all=予備として保存 / unlinked=URLが取れない画像だけ保存 / none=保存しない
+  let thumbSave = 'all';
+  const thumbSel = mk('select');
+  for (const [v, t] of [['all', '予備として保存する（URLが切れても表示できる）'], ['unlinked', 'URLが取れない画像だけ保存する'],
+    ['none', '保存しない（URLだけ。端末に画像を残さない）']]) thumbSel.append(new Option(t, v));
+  const thumbField = field('サムネイルの保存', thumbSel), thumbClear = mk('button', 0, '保存済みのサムネイルをすべて削除');
   const rateField = field('', rateInput), engineField = field('読み上げエンジン', engineSel);
   const voiceField = field('声', voiceSel);
   const panel = mk('div', 'pbv-panel');
   const modeRow = row(list, toggle, back);
   modeRow.style.cssText = 'display:grid;grid-template-columns:1fr 1.9fr 1fr';
-  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField), padField);
+  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField), padField, thumbField, thumbClear);
   imageTools.append(status, menu, panel);
   const displayBtn = mk('button', 'pbv-display', 'Aa');
   displayBtn.setAttribute('aria-label', '表示オプション');
@@ -531,6 +541,16 @@
     }
     renderList();
   }
+  // 縮小サムネ(data URL)を端末に保存するか。保存待ちを持ち、設定（thumbSave）に従って親ページへ送る。
+  const thumbData = new Map(), linkDone = new Set();
+  function persistThumb(pg) {
+    const data = thumbData.get(pg);
+    if (!data || thumbSave === 'none') return;
+    // 「URLが取れない画像だけ」は、結びつけを試し終えて、URLが付かなかった画像に限る。
+    if (thumbSave === 'unlinked' && (!linkDone.has(pg) || index.images.find(i => i.pg === pg)?.src)) return;
+    thumbData.delete(pg);
+    window.parent.postMessage({ type: 'pbv-thumb', pg, data }, 'https://play.google.com');
+  }
   function captureThumb(pg, el) {
     if (thumbs.has(pg) || !el) return;
     const href = el.tagName === 'IMG' ? (el.currentSrc || el.src) : (el.getAttribute('href') || el.getAttribute('xlink:href'));
@@ -547,7 +567,7 @@
         thumbs.set(pg, URL.createObjectURL(blob));
         clearTimeout(thumbTimer); thumbTimer = setTimeout(renderList, 300);
         const reader = new FileReader();
-        reader.onload = () => window.parent.postMessage({ type: 'pbv-thumb', pg, data: reader.result }, 'https://play.google.com');
+        reader.onload = () => { thumbData.set(pg, reader.result); persistThumb(pg); };
         reader.readAsDataURL(blob);
       }, 'image/jpeg', 0.65);
     };
@@ -574,6 +594,8 @@
       }
     } catch { /* 結びつけられなくても、保存した縮小サムネで表示できる */ }
     linking.delete(item.pg);
+    linkDone.add(item.pg);
+    persistThumb(item.pg);
   }
   const scanButton = document.createElement('button');
   scanButton.className = 'pbv-scan-start';
@@ -908,7 +930,8 @@
   };
   // 親ページに保存してあった設定を反映する（読み込み直後に1回）。
   function applySettings(saved) {
-    for (const k of ['pbv-rate', 'pbv-pad2', 'pbv-voice']) if (typeof saved[k] === 'string') cfg[k] = saved[k];
+    for (const k of ['pbv-rate', 'pbv-pad2', 'pbv-voice', 'pbv-thumbsave']) if (typeof saved[k] === 'string') cfg[k] = saved[k];
+    if (['all', 'unlinked', 'none'].includes(cfg['pbv-thumbsave'])) { thumbSave = cfg['pbv-thumbsave']; thumbSel.value = thumbSave; }
     const r = Number(cfg['pbv-rate']);
     if (r >= 0.5 && r <= 2.5) rate = r;
     const q = cfg['pbv-pad2'] === undefined ? NaN : Number(cfg['pbv-pad2']);
@@ -1077,6 +1100,18 @@
     resize();
   };
   padInput.addEventListener('input', () => { pad = Number(padInput.value); store('pbv-pad2', pad); applyPad(); });
+  const savedThumb = store('pbv-thumbsave');
+  if (['all', 'unlinked', 'none'].includes(savedThumb)) thumbSave = savedThumb;
+  thumbSel.value = thumbSave;
+  thumbSel.addEventListener('change', () => {
+    thumbSave = thumbSel.value; store('pbv-thumbsave', thumbSave);
+    for (const pg of [...thumbData.keys()]) persistThumb(pg);   // 切り替え前に作った保存待ちも、新しい設定で判断し直す
+  });
+  thumbClear.addEventListener('click', () => {
+    window.parent.postMessage({ type: 'pbv-thumb-clear' }, 'https://play.google.com');
+    thumbData.clear();   // 削除したものが、あとで復活しないように
+    status.textContent = '保存済みのサムネイルを削除しました';
+  });
   applyPad();
   toggle.addEventListener('click', () => {
     if (speaking) stopSpeech();   // 表示モードが変わるので読み上げを止める

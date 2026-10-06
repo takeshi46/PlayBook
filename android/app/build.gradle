@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'app.playbook'
     compileSdk 34
-    defaultConfig { applicationId 'app.playbook'; minSdk 26; targetSdk 34; versionCode 32; versionName '0.12.0' }
+    defaultConfig { applicationId 'app.playbook'; minSdk 26; targetSdk 34; versionCode 34; versionName '0.13.1' }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     // ??????????????????????????? assets ??????
     sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/assets')
