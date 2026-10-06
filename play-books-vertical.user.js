@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.16.0
+// @version      1.17.1
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -352,6 +352,13 @@
       display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;align-content:start;
       background:var(--pbv-bg,#fff);border:1px solid #1a73e8;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.25); }
     #pbv-gallery[hidden] { display:none!important; }
+    #pbv-gallery .pbv-scan-start { grid-column:1 / -1;flex-direction:row!important;justify-content:center;padding:10px!important;
+      font-weight:bold;border-color:#1a73e8!important;color:#1a73e8!important; }
+    #pbv-scan { position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:20px;padding:24px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);font:16px/1.6 sans-serif;text-align:center; }
+    #pbv-scan[hidden] { display:none!important; }
+    #pbv-scan p { margin:0; }
+    #pbv-scan button { min-height:46px;padding:0 28px;border:1px solid #8886;border-radius:12px;background:transparent;color:inherit;font:15px sans-serif; }
     #pbv-gallery button { display:flex;flex-direction:column;gap:4px;padding:4px;border:1px solid #8886;
       border-radius:6px;background:transparent;color:var(--pbv-ui,#222);cursor:pointer;font:12px sans-serif; }
     #pbv-gallery img { width:100%;aspect-ratio:3/4;object-fit:cover;background:#8884; }
@@ -388,6 +395,10 @@
   const status = document.createElement('span');
   gallery.id = 'pbv-gallery';
   gallery.hidden = true;
+  const scanBox = document.createElement('div'), scanText = document.createElement('p'), scanStop = document.createElement('button');
+  scanBox.id = 'pbv-scan'; scanBox.hidden = true;
+  scanText.setAttribute('role', 'status'); scanStop.textContent = '中止';
+  scanBox.append(scanText, scanStop);
   menu.id = 'pbv-menu';
   menu.hidden = true;   // バーに置けるまで隠す（右下に一瞬出ないように）
   menu.textContent = '☰';
@@ -416,8 +427,9 @@
   imageTools.append(status, menu, panel);
   const displayBtn = mk('button', 'pbv-display', 'Aa');
   displayBtn.setAttribute('aria-label', '表示オプション');
-  document.body.append(imageTools, gallery);
+  document.body.append(imageTools, gallery, scanBox);
   let active = false, busy = false, timeout, debounce, direction = 1, lastSignature = '', lastScroll = 0;
+  let scanning = false, scanCancel = false;   // 全ページから挿絵を探している間
   let ended = {};
   let context, pendingJump, landing, focusImage;
   let index = streamed;
@@ -444,17 +456,46 @@
       new Image().src = thumbUrl(item.src);
     }
   }
+  // 通常のURLを持たない画像（blob:）は、表示中の画像から縮小コピーを作る。保存はせず、この起動中のメモリだけで使う。
+  const thumbs = new Map();   // pg → サムネのURL（作成中は ''）
+  let thumbTimer;
+  function captureThumb(pg, el) {
+    if (thumbs.has(pg) || !el) return;
+    const href = el.tagName === 'IMG' ? (el.currentSrc || el.src) : (el.getAttribute('href') || el.getAttribute('xlink:href'));
+    if (!href) return;
+    thumbs.set(pg, '');
+    const im = new Image();
+    im.onload = () => {
+      const w = 240, h = Math.max(1, Math.round(w * (im.naturalHeight || 1) / (im.naturalWidth || 1)));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(im, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        if (!blob) { thumbs.delete(pg); return; }
+        thumbs.set(pg, URL.createObjectURL(blob));
+        clearTimeout(thumbTimer); thumbTimer = setTimeout(renderList, 300);
+      }, 'image/jpeg', 0.7);
+    };
+    im.onerror = () => thumbs.delete(pg);
+    im.src = href;
+  }
+  const scanButton = document.createElement('button');
+  scanButton.className = 'pbv-scan-start';
+  scanButton.textContent = '全ページから挿絵を探す（約15秒）';
+  scanButton.addEventListener('click', () => { gallery.hidden = true; renderList(); scanIllustrations(); });
+  scanStop.addEventListener('click', () => { scanCancel = true; });
+  const thumbOf = item => item.src ? thumbUrl(item.src) : thumbs.get(item.pg) || '';
   function fillGallery() {
-    const signature = index.images.map(item => item.pg + (item.src ? '+' : '')).join();
+    const signature = index.images.map(item => item.pg + (thumbOf(item) ? '+' : '')).join();
     if (gallery.dataset.signature === signature) return;
     gallery.dataset.signature = signature;
-    gallery.replaceChildren(...index.images.map((item, i) => {
+    gallery.replaceChildren(scanButton, ...index.images.map((item, i) => {
       const button = document.createElement('button');
       button.dataset.pg = item.pg;
-      if (item.src) {
+      if (thumbOf(item)) {
         const img = new Image();
-        img.alt = ''; img.decoding = 'async'; img.src = thumbUrl(item.src);
-        img.onerror = () => { img.onerror = null; img.src = item.src; };
+        img.alt = ''; img.decoding = 'async'; img.src = thumbOf(item);
+        if (item.src) img.onerror = () => { img.onerror = null; img.src = item.src; };
         button.append(img);
       }
       button.append(`挿絵 ${i + 1}`);
@@ -470,6 +511,44 @@
     window.parent.postMessage({ type: 'pbv-mark', mode: active }, 'https://play.google.com');
     timeout = setTimeout(() => { pendingJump = null; finish('位置を保存できませんでした。再試行'); }, 3000);
   }
+  // 全ページを高速に表示して、挿絵のあるページを探す。画面下のスライダー（ページ番号）へ値を入れて飛ぶ。
+  // 1ページずつ全部調べる（2ページ飛ばしだと、先読みされないページの挿絵を見落とす。実測: 19件中4件）。
+  // 結果の位置は保存し、終わったら元のページへ戻す。
+  // ponytail: 戻るのはページ単位（ページ内の細かい位置は失う）。再読み込みするとサムネが消えるので、スライダーで戻す。
+  async function scanIllustrations() {
+    const slider = document.querySelector('reader-app input.mdc-slider__input');
+    if (scanning || busy || !slider) { status.textContent = scanning || busy ? '処理中です' : 'この画面では全ページの確認に対応していません'; return; }
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const key = () => shown().map(p => p.id + ':' + (p.querySelector('.gb-segment')?.getAttribute('ocean-position') || '')).join('|');
+    const go = async v => {
+      const before = key();
+      setter.call(slider, String(v));
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+      for (let i = 0; i < 80 && key() === before; i++) await wait(10);
+      await wait(10);   // 画像が付くまで少し待つ（実測: 8msでも見落としなし。全250ページで約15秒）
+    };
+    const wasVertical = active;
+    scanning = true; scanCancel = false;
+    if (active) toggle.click();   // 通常表示で調べる（終わったら縦表示へ戻す）
+    busy = true; list.disabled = true;
+    const start = Number(slider.value), pages = Number(slider.max), before = index.images.length, t0 = Date.now();
+    scanBox.hidden = false;
+    try {
+      for (let v = 0; v < pages && !scanCancel; v++) {
+        await go(v); collectImages();
+        scanText.textContent = `挿絵を探しています… ${v + 1} / ${pages}ページ（${index.images.length}件）`;
+      }
+    } finally {
+      scanText.textContent = '元のページへ戻しています…';
+      await go(start);
+      scanning = false; busy = false; list.disabled = false; scanBox.hidden = true;
+      saveIndex(); renderList();
+      if (wasVertical) toggle.click();
+      status.textContent = scanCancel ? '中止しました' : `挿絵を${index.images.length}件登録しました（新規${index.images.length - before}件・${Math.round((Date.now() - t0) / 1000)}秒）`;
+    }
+  }
   // 上下の端に近づいたら次・前のページを自動で読み込む。
   function fill() {
     if (!active || busy || landing) return;
@@ -483,12 +562,12 @@
     const anchors = [...page.querySelectorAll('[id]')].filter(a => /^GBS\./.test(a.id)
       && (a.compareDocumentPosition(image) & 4));
     const pg = (anchors.at(-1)?.id || pageLocation(page)).replace(/_\d+$/, '');
-    return order(pg) === null ? null : { pg, order: order(pg) };
+    return order(pg) === null ? null : { pg, order: order(pg), el: image };
   }
   function isIllustration(img) {
     const rect = img.getBoundingClientRect();
     const clip = img.closest?.('reader-rendered-page')?.getBoundingClientRect();
-    if (clip) return Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left) >= 200
+    if (clip && clip.width > 0) return Math.min(rect.right, clip.right) - Math.max(rect.left, clip.left) >= 200
       && Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top) >= 200;
     return Math.max(rect.width, Number(img.getAttribute('width')) || 0, img.naturalWidth || 0) >= 200
       && Math.max(rect.height, Number(img.getAttribute('height')) || 0, img.naturalHeight || 0) >= 200;
@@ -501,12 +580,20 @@
     if (!context) return;
     window.parent.postMessage({ type: 'pbv-index', index }, 'https://play.google.com');
   }
-  function rememberImages() {
+  // 読み込み済みのページから挿絵を登録する（保存・描画はしない）。通常のURLを持たない画像は、縮小コピーを作る。
+  function collectImages() {
     for (const page of document.querySelectorAll('reader-pages reader-page.-gb-loaded')) {
       const found = imageLocation(page);
-      if (found && !index.images.some(item => item.pg === found.pg)) index.images.push(found);
+      if (!found) continue;
+      let item = index.images.find(i => i.pg === found.pg);
+      if (!item) { item = { pg: found.pg, order: found.order }; index.images.push(item); }
+      if (!item.src) captureThumb(found.pg, found.el);
     }
     index.images.sort((a, b) => a.order - b.order);
+  }
+  function rememberImages() {
+    if (scanning) return;
+    collectImages();
     saveIndex();
     renderList();
   }
@@ -571,7 +658,7 @@
     // ponytail: 2.625 は実測値（本によって違う場合は表示オプションの％と少しずれる）。
     const ratio = parseFloat(style.lineHeight) / size;
     const lh = ratio > 0 && isFinite(ratio) ? Math.min(3.5, Math.max(1.2, 1.9 * ratio / 2.625)).toFixed(3) : '';
-    for (const el of [view, imageTools, gallery]) {
+    for (const el of [view, imageTools, gallery, scanBox]) {
       el.style.setProperty('--pbv-bg', bg);
       el.style.setProperty('--pbv-ui', ui);
       el.style.setProperty('--pbv-fg', fg);
@@ -581,6 +668,7 @@
     }
   }
   function append() {
+    if (scanning) return;
     rememberImages();
     if (adjustLanding()) return;
     if (!active) return;
