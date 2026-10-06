@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.20.0
+// @version      1.20.1
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -391,8 +391,12 @@
       border:1px solid #8886;border-radius:12px;background:var(--pbv-bg,#fff);color:var(--pbv-ui,#222);
       font:14px sans-serif;cursor:pointer;text-overflow:ellipsis; }
     #pbv-panel button:disabled { opacity:.45;cursor:default; }
+    #pbv-panel details > summary { display:flex;align-items:center;min-height:42px;padding:0 12px;border:1px solid #8886;
+      border-radius:12px;font:14px sans-serif;cursor:pointer; }
+    #pbv-panel details[open] > summary { border-color:#1e8e3e;color:#1e8e3e; }
+    #pbv-panel details > :not(summary) { margin-top:10px; }
     #pbv-panel input[type=range] { width:100%;min-height:28px;margin:0; }
-    #pbv-panel #pbv-speak { min-height:50px;font-size:17px;font-weight:bold;background:#1a73e8;border-color:#1a73e8;color:#fff; }
+    #pbv-panel #pbv-speak { min-height:50px;font-size:17px;font-weight:bold;background:#1e8e3e;border-color:#1e8e3e;color:#fff; }
     #pbv-panel #pbv-speak.on { background:#d93025;border-color:#d93025; }
     #pbv-panel .pbv-seg { display:flex;padding:3px; }
     #pbv-panel .pbv-seg span { flex:1;display:flex;align-items:center;justify-content:center;border-radius:9px;
@@ -491,7 +495,9 @@
   const panel = mk('div', 'pbv-panel');
   const modeRow = row(list, toggle, back);
   modeRow.style.cssText = 'display:grid;grid-template-columns:1fr 1.9fr 1fr';
-  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField), padField, thumbField, thumbClear);
+  const thumbBox = mk('details');
+  thumbBox.append(mk('summary', 0, 'サムネイルの設定'), thumbField, thumbClear);
+  panel.append(modeRow, row(speak), rateField, row(engineField, voiceField), padField, thumbBox);
   imageTools.append(status, menu, panel);
   const displayBtn = mk('button', 'pbv-display', 'Aa');
   displayBtn.setAttribute('aria-label', '表示オプション');
