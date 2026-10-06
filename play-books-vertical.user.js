@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.14.2
+// @version      1.14.3
 // @description  端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -588,7 +588,11 @@
   const post = o => native.postMessage(JSON.stringify(o));
   if (native) native.onmessage = e => {
     const m = JSON.parse(e.data);
-    if (m.e === 'info') { nativeInfo = m; fillSelects(); return; }
+    if (m.e === 'info') {
+      nativeInfo = m; fillSelects();
+      if (status.textContent.startsWith('エンジンを切り替え')) status.textContent = '';
+      return;
+    }
     if (m.e === 'voice') { status.textContent = `声: ${m.m}`; return; }
     const w = waiting[m.id];
     delete waiting[m.id];
@@ -673,15 +677,23 @@
       if (list.length - list.indexOf(next) < 4) load(1);   // 先読み
     }
     const sentences = plain(next).match(/[^。！？!?]+[。！？!?]*[」』）)]*/g) || [];
+    if (native) {
+      // 段落の文をまとめて端末TTSのキューへ渡す。読んでいる間に次の文を作らせ、文と文の間の無音を減らす。
+      // ponytail: 段落をまたぐ先読みはしない（強調・スクロール・ページ送りが段落単位のため）。
+      sentences.forEach((t, k) => {
+        const id = ++uid, last = k === sentences.length - 1;
+        waiting[id] = {
+          done: () => { if (last) nextParagraph(me); },
+          fail: m => { stopSpeech(); status.textContent = `読み上げエラー: ${m}`; },
+        };
+        post({ c: 'speak', id, t, r: rate });
+      });
+      if (!sentences.length) nextParagraph(me);
+      return;
+    }
     (function say(k) {
       if (me !== token) return;
       if (k >= sentences.length) return nextParagraph(me);
-      if (native) {
-        const id = ++uid;
-        waiting[id] = { done: () => say(k + 1), fail: m => { stopSpeech(); status.textContent = `読み上げエラー: ${m}`; } };
-        post({ c: 'speak', id, t: sentences[k], r: rate });
-        return;
-      }
       const u = new SpeechSynthesisUtterance(sentences[k]), v = webVoices().find(x => x.name === voiceName) || webVoices()[0];
       u.lang = 'ja-JP'; u.rate = rate; if (v) u.voice = v;
       const t0 = Date.now();
