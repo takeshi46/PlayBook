@@ -7,9 +7,12 @@ import android.content.pm.ApplicationInfo;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -141,6 +144,7 @@ public class MainActivity extends Activity {
             JSONObject m = new JSONObject(data);
             switch (m.getString("c")) {
                 case "stop":
+                    reading = false;
                     tts.stop();
                     stopService(new Intent(this, KeepAliveService.class));
                     break;
@@ -169,6 +173,7 @@ public class MainActivity extends Activity {
         if (!ttsReady) { send(id, "error", "tts-not-ready"); return; }
         if (!jaVoice) { send(id, "error", "日本語の声がありません"); return; }
         startForegroundService(new Intent(this, KeepAliveService.class));
+        if (!reading) { reading = true; if (stopped) handler.post(keepRunning); }
         tts.setSpeechRate((float) m.optDouble("r", 1));
         tts.speak(m.getString("t"), TextToSpeech.QUEUE_ADD, null, id);
     }
@@ -179,6 +184,22 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
+
+    // 他のアプリを前面にしても、読み上げ（ページ送りなど）が止まらないよう、WebView を「表示中」のままにする。
+    // 裏に回ると WebView は表示なしと判断され、中の JS（タイマー・メッセージ）が止まるため。
+    // 画面が隠れた通知は少し遅れて届くので、読み上げ中は1秒ごとに「表示中」と伝え直す。
+    private boolean reading, stopped;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable keepRunning = new Runnable() {
+        @Override public void run() {
+            if (!reading || !stopped) return;
+            web.dispatchWindowVisibilityChanged(View.VISIBLE);
+            web.resumeTimers();
+            handler.postDelayed(this, 1000);
+        }
+    };
+    @Override protected void onStop() { super.onStop(); stopped = true; handler.post(keepRunning); }
+    @Override protected void onStart() { super.onStart(); stopped = false; }
 
     @Override protected void onDestroy() { tts.shutdown(); super.onDestroy(); }
 }
