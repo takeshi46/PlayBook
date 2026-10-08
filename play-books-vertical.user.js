@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.20.5
+// @version      1.20.6
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -411,6 +411,8 @@
     #pbv-panel .pbv-row > button:not(#pbv-speak) { padding:0 4px;font-size:13px; }
     #pbv-panel button[aria-expanded="true"] {
       background:#e8f0fe;border-color:#1a73e8;color:#1a73e8; }
+    /* 外字（フォントにない漢字の画像）は、ダークモードでも文字と同じく反転させる（元の黒のままだと暗い背景に溶ける）。 */
+    img.gaiji { filter:none!important; }
     reader-account-indicator, reader-app-bar button[aria-label*="全画面"],
     reader-app-bar button[aria-label="その他のオプション"], reader-app-bar button[aria-label="More options"] { display:none!important; }
     body.pbv-quiet .overflow-menu-dialog-container, body.pbv-quiet .cdk-overlay-backdrop { visibility:hidden!important; }
