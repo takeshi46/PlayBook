@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.20.4
+// @version      1.20.5
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -996,9 +996,15 @@
     return (active ? [...pages.querySelectorAll('.pbv-horizontal p')]
       : shown().flatMap(pg => [...pg.querySelectorAll('.gb-segment p')])).filter(hasText);
   }
-  // ルビ（rt/rp）は除き、漢字側を読む。
+  // ルビ（読み仮名）があれば、その読みを優先して読む（特殊な読みをTTSが外さないように）。
+  // 傍点など、かなを含まないルビは読みではないので、漢字側を読む。
   function plain(p) {
     const copy = p.cloneNode(true);
+    copy.querySelectorAll('ruby').forEach(r => {
+      const rt = r.querySelector('rt')?.textContent.trim() ?? '';
+      r.querySelectorAll('rt, rp').forEach(el => el.remove());
+      if (/[ぁ-ヿ]/.test(rt)) r.textContent = rt;
+    });
     copy.querySelectorAll('rt, rp').forEach(el => el.remove());
     return copy.textContent.replace(/\s+/g, ' ').trim();
   }
