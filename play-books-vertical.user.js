@@ -4,7 +4,7 @@
 // @homepageURL  https://github.com/takeshi46/PlayBook
 // @downloadURL  https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
 // @updateURL    https://raw.githubusercontent.com/takeshi46/PlayBook/main/play-books-vertical.user.js
-// @version      1.20.6
+// @version      1.20.7
 // @description  本一覧に読書進行度（％）を表示。端末標準TTSでの読み上げ（速度・声・追従）。横書き・上下スクロール（自動読み込み）とサムネ付き挿絵一覧ジャンプ。リーダーの章データから画像位置を取得。通常表示・ルビ対応。
 // @match        https://books.googleusercontent.com/books/reader/frame*
 // @match        https://play.google.com/books/reader*
@@ -955,6 +955,8 @@
   }
   let rate = Number(store('pbv-rate')) || 1, voiceName = store('pbv-voice') || '';
   let speaking = false, token = 0, current = null, quick = 0, uid = 0, nativeInfo = null;
+  // 通常表示で、ページの終わりで文が途中で切れていたときの前半。次のページの先頭と、つなげて読む。
+  let carry = '';
   const synth = window.speechSynthesis;
   // PlayBook アプリ（WebView）内なら、端末のTTSをアプリ側で直接使う（画面オフでも継続できる）。
   const native = window.PBNative, waiting = {};
@@ -1011,7 +1013,7 @@
     return copy.textContent.replace(/\s+/g, ' ').trim();
   }
   function stopSpeech() {
-    speaking = false; token++;
+    speaking = false; token++; carry = '';
     document.querySelectorAll('.pbv-tts').forEach(el => el.classList.remove('pbv-tts'));
     current = null;
     synth?.cancel(); uiLabels();
@@ -1049,13 +1051,20 @@
       if (ended[1]) { stopSpeech(); status.textContent = '最後まで読み上げました'; return; }
       load(1); setTimeout(() => nextParagraph(me), 600); return;
     }
-    current?.classList.remove('pbv-tts');
+    const fresh = !current;   // ページを送った直後（または読み始め）か。
+    // 強調は常に1か所だけ。ページ送りで見えなくなった古いページに残らないよう、全部外してから付ける。
+    document.querySelectorAll('.pbv-tts').forEach(el => el.classList.remove('pbv-tts'));
     current = next; next.classList.add('pbv-tts');
     if (active) {
       next.scrollIntoView({ block: 'center', behavior: 'smooth' });
       if (list.length - list.indexOf(next) < 4) load(1);   // 先読み
     }
-    const sentences = plain(next).match(/[^。！？!?]+[。！？!?]*[」』）)]*/g) || [];
+    const sentences = ((fresh ? carry : '') + plain(next)).match(/[^。！？!?]+[。！？!?]*[」』）)]*/g) || [];
+    carry = '';
+    // ページの最後の段落が文の途中で終わっていたら、その部分は読まずに取っておく（次のページの頭とつなげて読む）。
+    const more = pageButton(1);   // 最後のページなら取っておかず、そのまま読む
+    if (!active && next === list.at(-1) && more && !more.disabled && more.getAttribute('aria-disabled') !== 'true'
+      && sentences.length && !/[。！？!?」』）)…─]$/.test(sentences.at(-1))) carry = sentences.pop();
     if (native) {
       // 段落の文をまとめて端末TTSのキューへ渡す。読んでいる間に次の文を作らせ、文と文の間の無音を減らす。
       // ponytail: 段落をまたぐ先読みはしない（強調・スクロール・ページ送りが段落単位のため）。
